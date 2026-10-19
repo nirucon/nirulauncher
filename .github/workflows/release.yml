@@ -1,0 +1,46 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl toolchain and X11 test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools xvfb xdotool
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Verify release identity
+        run: |
+          test "$(./target/x86_64-unknown-linux-musl/release/nirulauncher --version | awk '{print $2}')" = "${GITHUB_REF_NAME#v}"
+      - name: Verify the binary is static and launchable
+        run: |
+          file target/x86_64-unknown-linux-musl/release/nirulauncher
+          if ldd target/x86_64-unknown-linux-musl/release/nirulauncher 2>&1 | grep -q '=>'; then
+            echo "::error::nirulauncher is dynamically linked"
+            exit 1
+          fi
+          sh tests/ui-smoke.sh target/x86_64-unknown-linux-musl/release/nirulauncher
+      - name: Collect assets
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/nirulauncher dist/
+          cd dist && sha256sum nirulauncher > SHA256SUMS && cat SHA256SUMS
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          make_latest: true
+          files: |
+            dist/nirulauncher
+            dist/SHA256SUMS
+          generate_release_notes: true

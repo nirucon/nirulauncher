@@ -1,15 +1,41 @@
 # NIRULAUNCHER
 
-A planned native application and action launcher for the NIRU X11 desktop.
+Native application and desktop-action launcher for the NIRU X11 desktop.
 **A personal project for the author's own machines; others are welcome to try it.**
 
-Status: design checkpoint, not yet an installable program. No binary release is
-published and nirux does not attempt to install it yet.
+- **Super+P:** focused application search and launch.
+- **Super+Shift+P:** applications plus desktop actions.
+- Keyboard-first, one process per invocation, no daemon, indexing service or network.
+- Reads suite colours from `~/.config/niruwm/config.toml` and user theme files.
+- Independent settings in `~/.config/nirulauncher/config.toml`.
 
-- Super+P: applications; Super+Shift+P: applications and desktop actions.
-- Centered on the active monitor, with keyboard-first search and NIRU styling.
-- Independent settings in `~/.config/nirulauncher/config.toml` (planned).
+## Install
 
-Implementation contract: [DESIGN.md](DESIGN.md).
-Authoritative tasks, dependencies and release gates:
-[NIRU roadmap, R4](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
+```sh
+./install.sh              # release binary
+./install.sh --build      # from this checkout
+```
+
+Requires an X11 session and a monospaced font (fontconfig or `font_path`).
+Current release assets target x86_64/glibc; the release workflow builds static
+musl binaries.
+
+## Use
+
+```sh
+nirulauncher --apps
+nirulauncher --actions
+nirulauncher --check-config
+```
+
+`--actions` includes lock, screensaver, reload, DND, idle inhibition, themes,
+workspaces and confirmed logout/reboot/shutdown. Applications with
+`Terminal=true` use the configured `terminal` argv. Desktop `Exec` lines are
+parsed into argv, never passed through a shell.
+
+Limitations in 0.1: Latin-1 keyboard input mapping (no input-method support),
+English `Name` keys, and a simple single-window list. The implementation
+contract is in [DESIGN.md](DESIGN.md); the authoritative roadmap is
+[nirux R4](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
+
+MIT. Copyright 2026 Nicklas Rudolfsson.

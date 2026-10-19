@@ -1,0 +1,20 @@
+# NIRULAUNCHER settings.
+# Location: ~/.config/nirulauncher/config.toml (or $XDG_CONFIG_HOME/nirulauncher/)
+#
+# Colours come from the suite theme selected in ~/.config/niruwm/config.toml.
+# A user theme file in ~/.config/niruwm/themes/NAME.toml takes precedence.
+
+# Window width in pixels. Clamped to the selected monitor.
+width = 640
+# Maximum visible result rows. The window grows with fewer results.
+max_rows = 12
+# One result row, in pixels.
+row_height = 26
+# Inner padding, in pixels.
+padding = 12
+# Font size. Use font_path for a specific font file.
+font_size = 15.0
+# font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+
+# Applications with Terminal=true are started through this argv array.
+terminal = ["kitty"]
