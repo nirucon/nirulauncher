@@ -1,4 +1,4 @@
-# Implementation contract — M2
+# Implementation contract — R4
 
 This document is a design, not a claim that the listed interfaces exist yet.
 Read nirux/ROADMAP.md and the current component code before implementation.

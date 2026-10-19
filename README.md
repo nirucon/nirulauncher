@@ -12,4 +12,4 @@ published and nirux does not attempt to install it yet.
 
 Implementation contract: [DESIGN.md](DESIGN.md).
 Authoritative tasks, dependencies and release gates:
-[NIRU roadmap, M2](https://github.com/nirucon/nirux/blob/main/ROADMAP.md#m2--nirulauncher-01-and-wm-integration).
+[NIRU roadmap, R4](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
