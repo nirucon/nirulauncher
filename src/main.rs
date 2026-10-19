@@ -101,6 +101,22 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         ),
         ("Toggle notifications", "Pause or resume DND", "dnd toggle"),
         ("Toggle keep-awake", "Inhibit idle lock/DPMS", "idle toggle"),
+        (
+            "Brightness up",
+            "Increase the backlight by 5%",
+            "brightness up",
+        ),
+        (
+            "Brightness down",
+            "Decrease the backlight by 5%",
+            "brightness down",
+        ),
+        (
+            "Night light",
+            "Toggle the manual night light",
+            "nightlight toggle",
+        ),
+        ("Suspend", "Lock, then suspend", "suspend"),
     ] {
         let mut parts = action.split(' ');
         let first = parts.next().unwrap_or_default();

@@ -28,8 +28,8 @@ nirulauncher --actions
 nirulauncher --check-config
 ```
 
-`--actions` includes lock, screensaver, reload, DND, idle inhibition, themes,
-workspaces and confirmed logout/reboot/shutdown. Applications with
+`--actions` includes lock, screensaver, reload, DND, idle inhibition, brightness,
+night light, suspend, themes, workspaces and confirmed logout/reboot/shutdown. Applications with
 `Terminal=true` use the configured `terminal` argv. Desktop `Exec` lines are
 parsed into argv, never passed through a shell.
 
