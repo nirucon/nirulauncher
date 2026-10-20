@@ -212,9 +212,13 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         .get("mode")
         .map(String::as_str)
         .unwrap_or("random");
+    let has_file = wallpaper
+        .get("file")
+        .map(|value| !value.is_empty())
+        .unwrap_or(false);
     let next_mode = match mode {
         "random" => "fixed",
-        "fixed" => "single",
+        "fixed" if has_file => "single",
         _ => "random",
     };
     items.push(Item {
