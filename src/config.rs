@@ -13,6 +13,8 @@ pub struct Config {
     pub font_path: Option<String>,
     pub font_size: f32,
     pub terminal: Vec<String>,
+    /// Desktop-file IDs or action names pinned above search rank.
+    pub favorites: Vec<String>,
     pub palette: Palette,
 }
 
@@ -59,6 +61,7 @@ impl Default for Config {
             font_path: None,
             font_size: 15.0,
             terminal: vec!["kitty".into()],
+            favorites: Vec::new(),
             palette: Palette::default(),
         }
     }
@@ -206,6 +209,9 @@ impl Config {
                 cfg.terminal = t;
             }
         }
+        if let Some(f) = array(v, "favorites") {
+            cfg.favorites = f;
+        }
         cfg.palette = suite_palette_from(&config_home());
         if !(8.0..=40.0).contains(&cfg.font_size) {
             return Err("font_size must be 8..40".into());
@@ -215,14 +221,15 @@ impl Config {
 
     pub fn describe(&self) -> String {
         format!(
-            "config: {}\nwidth: {}\nmax rows: {}\nrow height: {}\nfont: {} {}\nterminal: {}",
+            "config: {}\nwidth: {}\nmax rows: {}\nrow height: {}\nfont: {} {}\nterminal: {}\nfavorites: {}",
             path().display(),
             self.width,
             self.max_rows,
             self.row_height,
             self.font_size,
             self.font_path.as_deref().unwrap_or("auto"),
-            self.terminal.join(" ")
+            self.terminal.join(" "),
+            self.favorites.join(", ")
         )
     }
 }

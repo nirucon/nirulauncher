@@ -18,3 +18,6 @@ font_size = 15.0
 
 # Applications with Terminal=true are started through this argv array.
 terminal = ["kitty"]
+
+# Desktop-file IDs or action names pinned above search rank.
+# favorites = ["firefox.desktop", "Lock screen"]

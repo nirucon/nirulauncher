@@ -42,24 +42,41 @@ enum Target {
         terminal: bool,
         path: Option<std::path::PathBuf>,
     },
+    Focus(Window),
     Confirm(Action),
 }
 
 #[derive(Clone)]
 struct Item {
+    /// Stable key for favourites and local usage.
+    key: String,
+    group: String,
     name: String,
     detail: String,
+    favorite: bool,
     target: Target,
+}
+
+impl Item {
+    fn label(&self) -> String {
+        if self.group.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} · {}", self.group, self.name)
+        }
+    }
 }
 
 struct Ui {
     c: RustConnection,
+    root: Window,
     win: Window,
     gc: Gcontext,
     cfg: Config,
     renderer: Renderer,
     items: Vec<Item>,
     filtered: Vec<usize>,
+    usage: std::collections::HashMap<String, u64>,
     query: String,
     selected: usize,
     offset: usize,
@@ -123,9 +140,17 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         let rest: Vec<&str> = parts.collect();
         let mut argv = vec!["niructl".to_string(), first.to_string()];
         argv.extend(rest.into_iter().map(str::to_string));
+        let group = if matches!(first, "lock" | "screensaver" | "reload" | "dnd" | "idle") {
+            "System"
+        } else {
+            "Display"
+        };
         items.push(Item {
+            key: format!("action:{name}"),
+            group: group.into(),
             name: name.into(),
             detail: detail.into(),
+            favorite: false,
             target: Target::Spawn {
                 argv,
                 terminal: false,
@@ -135,15 +160,21 @@ fn action_items(cfg: &Config) -> Vec<Item> {
     }
     for theme in ["niru-noir", "niru-nord", "niru-satie", "niru-carl-larsson"] {
         items.push(Item {
+            key: format!("action:theme:{theme}"),
+            group: "Appearance".into(),
             name: format!("Theme: {theme}"),
             detail: "Apply across WM, bar, saver and lock".into(),
+            favorite: false,
             target: niructl(&["theme", theme]),
         });
     }
     for ws in 1..=9 {
         items.push(Item {
+            key: format!("action:workspace:{ws}"),
+            group: "Workspaces".into(),
             name: format!("Workspace {ws}"),
             detail: "Switch the focused monitor".into(),
+            favorite: false,
             target: niructl(&["tag", &ws.to_string()]),
         });
     }
@@ -153,8 +184,11 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         ("Shut down…", "Requires confirmation", Action::Shutdown),
     ] {
         items.push(Item {
+            key: format!("action:{name}"),
+            group: "Power".into(),
             name: name.into(),
             detail: detail.into(),
+            favorite: false,
             target: Target::Confirm(action),
         });
     }
@@ -165,8 +199,11 @@ fn action_items(cfg: &Config) -> Vec<Item> {
 fn app_items(apps: Vec<desktop::App>) -> Vec<Item> {
     apps.into_iter()
         .map(|app| Item {
+            key: app.id.clone(),
+            group: "Applications".into(),
             name: app.name,
             detail: app.id,
+            favorite: false,
             target: Target::Spawn {
                 argv: app.argv,
                 terminal: app.terminal,
@@ -176,30 +213,146 @@ fn app_items(apps: Vec<desktop::App>) -> Vec<Item> {
         .collect()
 }
 
-fn filtered(items: &[Item], query: &str) -> Vec<usize> {
+/// Open top-level windows from EWMH, for the action launcher's Windows group.
+fn window_items(c: &RustConnection, root: Window) -> Vec<Item> {
+    let Ok(atom) = intern(c, "_NET_CLIENT_LIST") else {
+        return Vec::new();
+    };
+    let Ok(reply) = c.get_property(false, root, atom, AtomEnum::ANY, 0, 128) else {
+        return Vec::new();
+    };
+    let Ok(reply) = reply.reply() else {
+        return Vec::new();
+    };
+    let windows: Vec<Window> = reply
+        .value32()
+        .map(|values| values.collect())
+        .unwrap_or_default();
+    let name_atom = intern(c, "_NET_WM_NAME").ok();
+    let utf8 = intern(c, "UTF8_STRING").ok();
+    let mut items = Vec::new();
+    for window in windows {
+        let class = c
+            .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .map(|r| String::from_utf8_lossy(&r.value).to_string())
+            .unwrap_or_default();
+        if class.contains("NIRULANCHER") || class.contains("NIRULOCK") {
+            continue;
+        }
+        let title = name_atom
+            .zip(utf8)
+            .and_then(|(atom, utf8)| {
+                c.get_property(false, window, atom, utf8, 0, 1024)
+                    .ok()?
+                    .reply()
+                    .ok()
+            })
+            .map(|r| String::from_utf8_lossy(&r.value).to_string())
+            .filter(|t| !t.is_empty())
+            .or_else(|| {
+                c.get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)
+                    .ok()?
+                    .reply()
+                    .ok()
+                    .map(|r| String::from_utf8_lossy(&r.value).to_string())
+            })
+            .unwrap_or_else(|| format!("Window {window}"));
+        items.push(Item {
+            key: format!("window:{window}"),
+            group: "Windows".into(),
+            name: title,
+            detail: "Switch to this window".into(),
+            favorite: false,
+            target: Target::Focus(window),
+        });
+    }
+    items.truncate(64);
+    items
+}
+
+fn usage_path() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                .join(".local/state")
+        });
+    base.join("nirulauncher/usage.tsv")
+}
+
+fn load_usage() -> std::collections::HashMap<String, u64> {
+    let mut usage = std::collections::HashMap::new();
+    let Ok(text) = std::fs::read_to_string(usage_path()) else {
+        return usage;
+    };
+    for line in text.lines().take(500) {
+        let Some((key, stamp)) = line.rsplit_once('\t') else {
+            continue;
+        };
+        if let Ok(stamp) = stamp.parse::<u64>() {
+            usage.insert(key.to_string(), stamp);
+        }
+    }
+    usage
+}
+
+fn record_usage(key: &str) {
+    let mut usage = load_usage();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    usage.insert(key.to_string(), now);
+    let mut rows: Vec<(&String, &u64)> = usage.iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(a.1));
+    rows.truncate(200);
+    let text: String = rows
+        .into_iter()
+        .map(|(key, stamp)| format!("{key}\t{stamp}\n"))
+        .collect();
+    if let Some(parent) = usage_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(usage_path(), text);
+}
+
+fn filtered(
+    items: &[Item],
+    query: &str,
+    usage: &std::collections::HashMap<String, u64>,
+) -> Vec<usize> {
     let q = query.trim().to_lowercase();
-    let mut hits: Vec<(u8, usize)> = items
+    let mut hits: Vec<(bool, u8, u64, usize)> = items
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
+            let label = item.label().to_lowercase();
             let name = item.name.to_lowercase();
             let detail = item.detail.to_lowercase();
-            let rank = if q.is_empty() || name == q {
+            let rank = if q.is_empty() || name == q || label == q {
                 0
-            } else if name.starts_with(&q) {
+            } else if name.starts_with(&q) || label.starts_with(&q) {
                 1
-            } else if name.contains(&q) {
+            } else if name.contains(&q) || label.contains(&q) {
                 2
             } else if detail.contains(&q) {
                 3
             } else {
                 return None;
             };
-            Some((rank, i))
+            let last_used = usage.get(&item.key).copied().unwrap_or(0);
+            Some((!item.favorite, rank, last_used, i))
         })
         .collect();
-    hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    hits.into_iter().map(|(_, i)| i).collect()
+    hits.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.3.cmp(&b.3))
+    });
+    hits.into_iter().map(|(_, _, _, i)| i).collect()
 }
 
 fn monitor_at(c: &RustConnection, root: Window, px: i16, py: i16) -> Rect {
@@ -255,18 +408,28 @@ impl Ui {
     fn new(mode: &str) -> Result<Self> {
         let cfg = Config::load()?;
         let apps = desktop::discover();
+        let (c, screen) = x11rb::connect(None)?;
+        let root = c.setup().roots[screen].root;
         let mut items = Vec::new();
         if mode == "actions" {
             items.extend(action_items(&cfg));
+            items.extend(window_items(&c, root));
             items.extend(app_items(apps));
+        } else if mode == "windows" {
+            items.extend(window_items(&c, root));
         } else {
             items.extend(app_items(apps));
+        }
+        for item in &mut items {
+            item.favorite = cfg.favorites.iter().any(|favorite| {
+                favorite == &item.key
+                    || favorite.eq_ignore_ascii_case(&item.name)
+                    || favorite == &item.label()
+            });
         }
         if items.is_empty() {
             return Err("no launchable applications or actions found".into());
         }
-        let (c, screen) = x11rb::connect(None)?;
-        let root = c.setup().roots[screen].root;
         let (px, py) = point(&c, root);
         let monitor = monitor_at(&c, root, px, py);
         let rows = items.len().min(cfg.max_rows).max(1);
@@ -377,15 +540,18 @@ impl Ui {
         );
         c.set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME)?;
         c.flush()?;
-        let filtered: Vec<usize> = (0..items.len()).collect();
+        let usage = load_usage();
+        let filtered = filtered(&items, "", &usage);
         let mut ui = Self {
             c,
+            root,
             win,
             gc,
             cfg,
             renderer,
             items,
             filtered,
+            usage,
             query: String::new(),
             selected: 0,
             offset: 0,
@@ -477,8 +643,9 @@ impl Ui {
             let name_colour = pal.foreground;
             let detail_colour = pal.muted;
             let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
+            let label = item.label();
             let name = truncate(
-                &item.name,
+                &label,
                 (self.width as i16 - pad * 2) / self.renderer.advance.max(1),
             );
             self.renderer
@@ -529,7 +696,7 @@ impl Ui {
     }
 
     fn refilter(&mut self) {
-        self.filtered = filtered(&self.items, &self.query);
+        self.filtered = filtered(&self.items, &self.query, &self.usage);
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
         self.confirm = None;
@@ -551,7 +718,7 @@ impl Ui {
         self.confirm = None;
     }
 
-    fn execute(&mut self, target: Target) -> Result<bool> {
+    fn execute(&mut self, key: &str, target: Target) -> Result<bool> {
         match target {
             Target::Confirm(action) => {
                 if self.confirm.is_some() {
@@ -568,18 +735,39 @@ impl Ui {
                         self.draw()?;
                         return Ok(true);
                     }
+                    record_usage(key);
+                    self.usage = load_usage();
                     return Ok(false);
                 }
                 self.confirm = Some(action);
                 self.draw()?;
                 Ok(true)
             }
+            Target::Focus(window) => {
+                let atom = intern(&self.c, "_NET_ACTIVE_WINDOW")?;
+                let event =
+                    ClientMessageEvent::new(32, window, atom, [1, x11rb::CURRENT_TIME, 0, 0, 0]);
+                self.c.send_event(
+                    false,
+                    self.root,
+                    EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                    event,
+                )?;
+                self.c.flush()?;
+                record_usage(key);
+                self.usage = load_usage();
+                Ok(false)
+            }
             Target::Spawn {
                 argv,
                 terminal,
                 path,
             } => match spawn_command(&argv, path.as_deref(), terminal, &self.cfg) {
-                Ok(()) => Ok(false),
+                Ok(()) => {
+                    record_usage(key);
+                    self.usage = load_usage();
+                    Ok(false)
+                }
                 Err(e) => {
                     self.error = e;
                     self.confirm = None;
@@ -595,7 +783,8 @@ impl Ui {
             return Ok(true);
         };
         let target = self.items[index].target.clone();
-        self.execute(target)
+        let key = self.items[index].key.clone();
+        self.execute(&key, target)
     }
 
     fn close(&self) -> Result<()> {
@@ -765,6 +954,43 @@ fn spawn_command(
         .map_err(|e| format!("cannot start {program}: {e}"))
 }
 
+/// Keyboard level: base, Shift, AltGr (MOD5), then Shift+AltGr.
+fn keyboard_level(state: KeyButMask) -> usize {
+    let shift = state.contains(KeyButMask::SHIFT);
+    let altgr = state.contains(KeyButMask::MOD5);
+    match (shift, altgr) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (true, true) => 3,
+    }
+}
+
+/// X applies Caps Lock to alphabetic keysyms, including Latin-1 letters.
+fn apply_caps(sym: u32, lock: bool) -> u32 {
+    if !lock {
+        return sym;
+    }
+    if (0x61..=0x7a).contains(&sym) || (0xe0..=0xfe).contains(&sym) && sym != 0xf7 {
+        return sym.saturating_sub(0x20);
+    }
+    if (0x41..=0x5a).contains(&sym) || (0xc0..=0xde).contains(&sym) && sym != 0xd7 {
+        return sym + 0x20;
+    }
+    sym
+}
+
+fn keyboard_symbol(syms: &[u32], state: KeyButMask) -> u32 {
+    let level = keyboard_level(state);
+    let sym = syms
+        .get(level)
+        .or_else(|| syms.get(level % 2))
+        .or_else(|| syms.first())
+        .copied()
+        .unwrap_or(0);
+    apply_caps(sym, state.contains(KeyButMask::LOCK))
+}
+
 fn key_text(c: &RustConnection, keycode: u8, state: KeyButMask) -> (u32, bool) {
     let shift = state.contains(KeyButMask::SHIFT);
     let Ok(map) = c
@@ -775,9 +1001,8 @@ fn key_text(c: &RustConnection, keycode: u8, state: KeyButMask) -> (u32, bool) {
     else {
         return (0, shift);
     };
-    let per = map.keysyms_per_keycode.max(1) as usize;
-    let level = usize::from(shift && per > 1);
-    (map.keysyms.get(level).copied().unwrap_or(0), shift)
+    let _ = map.keysyms_per_keycode;
+    (keyboard_symbol(&map.keysyms, state), shift)
 }
 
 fn main() {
@@ -802,11 +1027,11 @@ fn main() {
             }
             Ok(())
         }
-        "--apps" | "--actions" => {
-            let mode = if arg == "--actions" {
-                "actions"
-            } else {
-                "apps"
+        "--apps" | "--actions" | "--windows" => {
+            let mode = match arg {
+                "--actions" => "actions",
+                "--windows" => "windows",
+                _ => "apps",
             };
             match Ui::new(mode) {
                 Ok(mut ui) => ui.run(),
@@ -814,16 +1039,82 @@ fn main() {
             }
         }
         "--help" => {
-            println!("Usage: nirulauncher [--apps|--actions|--check-config|--list|--version]");
+            println!(
+                "Usage: nirulauncher [--apps|--actions|--windows|--check-config|--list|--version]"
+            );
             Ok(())
         }
         _ => {
-            eprintln!("Usage: nirulauncher [--apps|--actions|--check-config|--list|--version]");
+            eprintln!(
+                "Usage: nirulauncher [--apps|--actions|--windows|--check-config|--list|--version]"
+            );
             std::process::exit(2);
         }
     };
     if let Err(e) = result {
         eprintln!("nirulauncher: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::{apply_caps, keyboard_level, keyboard_symbol};
+    use x11rb::protocol::xproto::KeyButMask;
+
+    #[test]
+    fn levels_cover_shift_and_altgr() {
+        assert_eq!(keyboard_level(KeyButMask::default()), 0);
+        assert_eq!(keyboard_level(KeyButMask::SHIFT), 1);
+        assert_eq!(keyboard_level(KeyButMask::MOD5), 2);
+        assert_eq!(keyboard_level(KeyButMask::SHIFT | KeyButMask::MOD5), 3);
+    }
+
+    fn searchable(key: &str, group: &str, name: &str) -> super::Item {
+        super::Item {
+            key: key.into(),
+            group: group.into(),
+            name: name.into(),
+            detail: String::new(),
+            favorite: false,
+            target: super::Target::Confirm(super::Action::Logout),
+        }
+    }
+
+    #[test]
+    fn favourites_and_local_recency_order_the_results() {
+        let mut items = vec![
+            searchable("a", "Applications", "Alpha"),
+            searchable("b", "Applications", "Beta"),
+            searchable("c", "Applications", "Gamma"),
+        ];
+        items[1].favorite = true;
+        let mut usage = std::collections::HashMap::new();
+        usage.insert("c".to_string(), 20);
+        usage.insert("a".to_string(), 10);
+        let order = super::filtered(&items, "", &usage);
+        assert_eq!(order, vec![1, 2, 0], "favourite, then most recently used");
+    }
+
+    #[test]
+    fn group_names_are_searchable() {
+        let items = vec![searchable("w1", "Windows", "Editor")];
+        let usage = std::collections::HashMap::new();
+        assert_eq!(super::filtered(&items, "windows", &usage), vec![0]);
+        assert_eq!(super::filtered(&items, "editor", &usage), vec![0]);
+        assert!(super::filtered(&items, "missing", &usage).is_empty());
+    }
+
+    #[test]
+    fn altgr_and_caps_produce_the_expected_symbols() {
+        // Swedish key with base, Shift, AltGr and Shift+AltGr levels.
+        let syms = [0x32, 0x22, 0x40, 0x32];
+        assert_eq!(keyboard_symbol(&syms, KeyButMask::MOD5), 0x40);
+        assert_eq!(
+            keyboard_symbol(&syms, KeyButMask::SHIFT | KeyButMask::MOD5),
+            0x32
+        );
+        assert_eq!(apply_caps(0xe5, true), 0xc5, "Caps Lock applies to å");
+        assert_eq!(apply_caps(0x40, true), 0x40, "Caps Lock leaves @ alone");
     }
 }
