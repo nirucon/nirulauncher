@@ -168,6 +168,117 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             target: niructl(&["theme", theme]),
         });
     }
+    // Wallpaper choices and settings come from niructl, so the launcher does
+    // not duplicate the wallpaper parser or write config.toml itself.
+    let wallpaper_list = Command::new("niructl")
+        .args(["wallpaper", "list"])
+        .output()
+        .ok();
+    if let Some(out) = wallpaper_list {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let Some((name, path)) = line.split_once('\t') else {
+                    continue;
+                };
+                if name.is_empty() || path.is_empty() {
+                    continue;
+                }
+                items.push(Item {
+                    key: format!("action:wallpaper:{path}"),
+                    group: "Wallpaper".into(),
+                    name: format!("Wallpaper: {name}"),
+                    detail: "Use this image on the desktop".into(),
+                    favorite: false,
+                    target: niructl(&["wallpaper", "set", path]),
+                });
+            }
+        }
+    }
+
+    let mut wallpaper = std::collections::HashMap::new();
+    if let Ok(out) = Command::new("niructl")
+        .args(["wallpaper", "status"])
+        .output()
+    {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some((key, value)) = line.split_once('=') {
+                    wallpaper.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    let mode = wallpaper
+        .get("mode")
+        .map(String::as_str)
+        .unwrap_or("random");
+    let next_mode = match mode {
+        "random" => "fixed",
+        "fixed" => "single",
+        _ => "random",
+    };
+    items.push(Item {
+        key: "action:wallpaper:mode".into(),
+        group: "Wallpaper".into(),
+        name: format!("Wallpaper mode: {mode}"),
+        detail: format!("Next: {next_mode}"),
+        favorite: false,
+        target: niructl(&["wallpaper", "mode", next_mode]),
+    });
+
+    let rotation = wallpaper
+        .get("rotation_minutes")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(10);
+    let next_rotation = match rotation {
+        0 => 5,
+        5 => 10,
+        10 => 30,
+        30 => 60,
+        _ => 0,
+    };
+    items.push(Item {
+        key: "action:wallpaper:rotation".into(),
+        group: "Wallpaper".into(),
+        name: format!("Wallpaper rotation: {rotation} min"),
+        detail: format!("Next: {next_rotation} min"),
+        favorite: false,
+        target: niructl(&["wallpaper", "rotation", &next_rotation.to_string()]),
+    });
+
+    let scale = wallpaper.get("scale").map(String::as_str).unwrap_or("fill");
+    let next_scale = match scale {
+        "fill" => "fit",
+        "fit" => "stretch",
+        "stretch" => "center",
+        _ => "fill",
+    };
+    items.push(Item {
+        key: "action:wallpaper:scale".into(),
+        group: "Wallpaper".into(),
+        name: format!("Wallpaper scale: {scale}"),
+        detail: format!("Next: {next_scale}"),
+        favorite: false,
+        target: niructl(&["wallpaper", "scale", next_scale]),
+    });
+
+    let follow = wallpaper
+        .get("follow_theme")
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let next_follow = if follow { "off" } else { "on" };
+    items.push(Item {
+        key: "action:wallpaper:follow-theme".into(),
+        group: "Wallpaper".into(),
+        name: format!(
+            "Follow theme wallpaper: {}",
+            if follow { "on" } else { "off" }
+        ),
+        detail: format!("Turn {next_follow}"),
+        favorite: false,
+        target: niructl(&["wallpaper", "follow-theme", next_follow]),
+    });
+
     for ws in 1..=9 {
         items.push(Item {
             key: format!("action:workspace:{ws}"),
