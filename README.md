@@ -11,7 +11,12 @@ Native application and desktop-action launcher for the NIRU X11 desktop.
 
 ## Install
 
+Use [NIRUX](https://github.com/nirucon/nirux#install) for the complete desktop on
+**Void glibc, Debian and Arch Linux**, or install independently:
+
 ```sh
+git clone https://github.com/nirucon/nirulauncher
+cd nirulauncher
 ./install.sh              # release binary
 ./install.sh --build      # from this checkout
 ```
@@ -36,6 +41,6 @@ parsed into argv, never passed through a shell.
 Limitations in 0.1: Latin-1 keyboard input mapping (no input-method support),
 English `Name` keys, and a simple single-window list. The implementation
 contract is in [DESIGN.md](DESIGN.md); the authoritative roadmap is
-[nirux R4](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
+[NIRUX roadmap](https://github.com/nirucon/nirux/blob/main/ROADMAP.md).
 
 MIT. Copyright 2026 Nicklas Rudolfsson.
