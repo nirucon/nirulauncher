@@ -136,6 +136,12 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             "nightlight toggle",
         ),
         ("Suspend", "Lock, then suspend", "suspend"),
+        ("Mute audio", "Toggle the default output", "audio mute"),
+        (
+            "Mute microphone",
+            "Toggle the default microphone",
+            "audio mic-mute",
+        ),
     ] {
         let mut parts = action.split(' ');
         let first = parts.next().unwrap_or_default();
@@ -144,6 +150,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         argv.extend(rest.into_iter().map(str::to_string));
         let group = if matches!(first, "lock" | "screensaver" | "reload" | "dnd" | "idle") {
             "System"
+        } else if first == "audio" {
+            "Audio"
         } else {
             "Display"
         };
@@ -193,6 +201,39 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                     favorite: false,
                     target: niructl(&["wallpaper", "set", path]),
                 });
+            }
+        }
+    }
+
+    // Audio output/source selection uses niructl -> wpctl. The ID, not the
+    // display name, is authoritative because two devices may share a name.
+    for (kind, label) in [("outputs", "Audio output"), ("sources", "Microphone")] {
+        if let Ok(out) = Command::new("niructl").args(["audio", kind]).output() {
+            if out.status.success() {
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let (default, rest) = match line.strip_prefix('*') {
+                        Some(rest) => (true, rest),
+                        None => (false, line),
+                    };
+                    let Some((id, name)) = rest.split_once('\t') else {
+                        continue;
+                    };
+                    if id.is_empty() || name.is_empty() {
+                        continue;
+                    }
+                    items.push(Item {
+                        key: format!("action:audio:{kind}:{id}"),
+                        group: "Audio".into(),
+                        name: format!("{label}: {name}"),
+                        detail: if default {
+                            "Current device".into()
+                        } else {
+                            "Use this device".into()
+                        },
+                        favorite: false,
+                        target: niructl(&["audio", kind.trim_end_matches('s'), id]),
+                    });
+                }
             }
         }
     }
