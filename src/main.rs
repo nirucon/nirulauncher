@@ -153,6 +153,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             "System"
         } else if first == "audio" {
             "Audio"
+        } else if first == "mode" {
+            "Work modes"
         } else {
             "Display"
         };
@@ -295,6 +297,32 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             path: None,
         },
     });
+
+    if let Ok(out) = Command::new("niructl").args(["recipe", "list"]).output() {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let mut fields = line.splitn(3, '\t');
+                let name = fields.next().unwrap_or("");
+                let count = fields.next().unwrap_or("");
+                let detail = fields.next().unwrap_or("");
+                if name.is_empty() {
+                    continue;
+                }
+                items.push(Item {
+                    key: format!("recipe:{name}"),
+                    group: "Recipes".into(),
+                    name: name.into(),
+                    detail: if detail.is_empty() {
+                        format!("{count} apps")
+                    } else {
+                        format!("{count} apps · {detail}")
+                    },
+                    favorite: false,
+                    target: niructl(&["recipe", "run", name]),
+                });
+            }
+        }
+    }
 
     let mut wallpaper = std::collections::HashMap::new();
     if let Ok(out) = Command::new("niructl")

@@ -6,7 +6,7 @@
 #   ./install.sh --uninstall remove the binary and the installed config example
 set -eu
 
-VERSION="0.2.6"
+VERSION="0.2.7"
 REPO="${NIRULAUNCHER_REPO:-nirucon/nirulauncher}"
 PREFIX="${NIRULAUNCHER_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"
