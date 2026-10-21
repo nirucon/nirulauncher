@@ -1,9 +1,10 @@
 # NIRULAUNCHER
 
-Keyboard-first application, window and desktop-action launcher for the NIRU X11
+**Part of [NIRUX - A minimal X11 desktop by Nicklas Rudolfsson](https://github.com/nirucon/nirux).**
+
+**Early beta.** Keyboard-first application, window and desktop-action launcher for the NIRU X11
 desktop. One process per invocation: no daemon, indexing service or network.
 
-Part of the [NIRUX suite](https://github.com/nirucon/nirux): [NIRUWM](https://github.com/nirucon/niruwm) · [NIRUBAR](https://github.com/nirucon/nirubar) · [NIRUSCREENSAVER](https://github.com/nirucon/niruscreensaver) · [NIRULOCK](https://github.com/nirucon/nirulock) · [NIRULAUNCHER](https://github.com/nirucon/nirulauncher) · [NIRUNOTIFY](https://github.com/nirucon/nirunotify) · [NIRUSHOT](https://github.com/nirucon/nirushot).
 
 ## Install
 
@@ -50,6 +51,10 @@ under `~/.local/state/nirulauncher/`. Colours and font come from
 
 Current limits: no input-method framework, English `Name` keys, and Latin-1-only
 keysym text. Shift, Caps Lock and AltGr are handled, including Swedish letters.
+
+## NIRUX suite
+
+[NIRUX](https://github.com/nirucon/nirux) · [NIRUWM](https://github.com/nirucon/niruwm) · [NIRUBAR](https://github.com/nirucon/nirubar) · [NIRUSCREENSAVER](https://github.com/nirucon/niruscreensaver) · [NIRULOCK](https://github.com/nirucon/nirulock) · [NIRULAUNCHER](https://github.com/nirucon/nirulauncher) · [NIRUNOTIFY](https://github.com/nirucon/nirunotify) · [NIRUSHOT](https://github.com/nirucon/nirushot)
 
 ## Development
 
