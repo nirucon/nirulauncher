@@ -102,6 +102,103 @@ fn set_utf8(c: &RustConnection, win: Window, atom: Atom, value: &str) -> Result<
     Ok(())
 }
 
+/// Keyboard-accessible input controls. Device IDs and state come from niructl;
+/// no microphone or mute setting changes just by opening this view.
+fn microphone_items() -> Vec<Item> {
+    let mut items = Vec::new();
+    for (key, name, detail, args) in [
+        (
+            "mute",
+            "Mute microphone",
+            "Toggle input mute",
+            vec!["mic-mute"],
+        ),
+        (
+            "up",
+            "Microphone level up",
+            "Increase input gain by 5%; keep mute",
+            vec!["mic-level", "up"],
+        ),
+        (
+            "down",
+            "Microphone level down",
+            "Decrease input gain by 5%; keep mute",
+            vec!["mic-level", "down"],
+        ),
+    ] {
+        items.push(Item {
+            key: format!("action:microphone:{key}"),
+            group: "Audio".into(),
+            name: name.into(),
+            detail: detail.into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: ["niructl", "audio"]
+                    .into_iter()
+                    .chain(args)
+                    .map(str::to_string)
+                    .collect(),
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    match Command::new("niructl").args(["audio", "sources"]).output() {
+        Ok(output) if output.status.success() => {
+            let mut found = false;
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let default = line.starts_with('*');
+                let Some((id, name)) = line.trim_start_matches('*').split_once('\t') else {
+                    continue;
+                };
+                if id.parse::<u32>().is_err() || name.is_empty() {
+                    continue;
+                }
+                found = true;
+                items.push(Item {
+                    key: format!("action:audio:sources:{id}"),
+                    group: "Audio".into(),
+                    name: format!("Microphone: {name}"),
+                    detail: if default {
+                        "Current input"
+                    } else {
+                        "Use this input"
+                    }
+                    .into(),
+                    favorite: false,
+                    target: Target::Spawn {
+                        argv: vec!["niructl".into(), "audio".into(), "source".into(), id.into()],
+                        terminal: false,
+                        path: None,
+                    },
+                });
+            }
+            if !found {
+                items.push(microphone_info(
+                    "No microphone",
+                    "No audio input is available",
+                ));
+            }
+        }
+        _ => items.push(microphone_info(
+            "Microphone unavailable",
+            "niructl / WirePlumber did not respond",
+        )),
+    }
+    items
+}
+
+fn microphone_info(name: &str, detail: &str) -> Item {
+    Item {
+        key: "microphone:status".into(),
+        group: "Audio".into(),
+        name: name.into(),
+        detail: detail.into(),
+        favorite: false,
+        target: Target::Info,
+    }
+}
+
 fn action_items(cfg: &Config) -> Vec<Item> {
     let mut items = Vec::new();
     let niructl = |args: &[&str]| Target::Spawn {
@@ -138,11 +235,6 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         ),
         ("Suspend", "Lock, then suspend", "suspend"),
         ("Mute audio", "Toggle the default output", "audio mute"),
-        (
-            "Mute microphone",
-            "Toggle the default microphone",
-            "audio mic-mute",
-        ),
     ] {
         let mut parts = action.split(' ');
         let first = parts.next().unwrap_or_default();
@@ -210,7 +302,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
 
     // Audio output/source selection uses niructl -> wpctl. The ID, not the
     // display name, is authoritative because two devices may share a name.
-    for (kind, label) in [("outputs", "Audio output"), ("sources", "Microphone")] {
+    for (kind, label) in [("outputs", "Audio output")] {
         if let Ok(out) = Command::new("niructl").args(["audio", kind]).output() {
             if out.status.success() {
                 for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -240,6 +332,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             }
         }
     }
+
+    items.extend(microphone_items());
 
     if let Ok(out) = Command::new("niructl")
         .args(["explain", "--launcher"])
@@ -659,6 +753,8 @@ impl Ui {
             items.extend(action_items(&cfg));
             items.extend(window_items(&c, root));
             items.extend(app_items(apps));
+        } else if mode == "microphone" {
+            items.extend(microphone_items());
         } else if mode == "windows" {
             items.extend(window_items(&c, root));
         } else {
@@ -835,6 +931,8 @@ impl Ui {
         )?;
         let title = if self.confirm.is_some() {
             "Confirm"
+        } else if self.items.iter().all(|item| item.group == "Audio") {
+            "Microphone controls"
         } else if self
             .items
             .iter()
@@ -1288,10 +1386,11 @@ fn main() {
             }
             Ok(())
         }
-        "--apps" | "--actions" | "--windows" => {
+        "--apps" | "--actions" | "--windows" | "--microphone" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--windows" => "windows",
+                "--microphone" => "microphone",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -1301,13 +1400,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--check-config|--list|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--check-config|--list|--version]"
             );
             std::process::exit(2);
         }

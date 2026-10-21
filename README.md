@@ -33,6 +33,7 @@ musl binaries.
 nirulauncher --apps
 nirulauncher --actions
 nirulauncher --windows
+nirulauncher --microphone
 nirulauncher --check-config
 ```
 
@@ -40,6 +41,9 @@ nirulauncher --check-config
 results; applications follow. Rows grow with the configured font, and the
 selected row uses a 3 px theme-accent focus bar. Audio outputs and microphones
 are listed as actions through `niructl audio`, alongside output/microphone mute.
+`--microphone` opens only input selection, mute and input-gain controls, usable
+with arrows/search and Enter. Opening it changes nothing. Gain changes preserve
+mute, and missing inputs are explained. These controls also appear in `--actions`.
 The Diagnostics group explains unavailable services from `niructl explain`, with
 a direct action to the full `nirux doctor` report. Work modes start timed
 focus/presentation DND and keep-awake; launcher recipes run configured app

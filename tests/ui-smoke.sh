@@ -94,4 +94,35 @@ while kill -0 "$LAUNCHER" 2>/dev/null; do
   sleep 0.05
 done
 LAUNCHER=""
+# A dedicated microphone view reads inputs without changing anything; Enter
+# selects the exact source ID, including when the name contains spaces.
+mkdir -p "$T/bin"
+cat > "$T/bin/niructl" <<'AUDIO'
+#!/bin/sh
+case "$*" in
+  'audio sources') printf '*53\tBuilt-in microphone\n67\tUSB podcast microphone\n' ;;
+  *) printf '%s\n' "$*" >> "$ARGS_FILE" ;;
+esac
+AUDIO
+chmod +x "$T/bin/niructl"
+export PATH="$T/bin:$PATH"
+rm -f "$ARGS_FILE"
+"$BIN" --microphone >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo 'FAIL microphone view'; exit 1; }
+  sleep 0.05
+done
+[ ! -s "$ARGS_FILE" ] || { echo 'FAIL opening microphone view changed audio'; exit 1; }
+xdotool type --delay 20 'podcast'
+xdotool key Return
+i=0
+while [ ! -s "$ARGS_FILE" ]; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL microphone selection'; exit 1; }
+  sleep 0.05
+done
+grep -qxF 'audio source 67' "$ARGS_FILE"
+wait "$LAUNCHER"
+LAUNCHER=""
 echo "PASS ui-smoke"
