@@ -295,6 +295,70 @@ fn bluetooth_items() -> Vec<Item> {
     items
 }
 
+fn spawn_niructl(args: &[&str]) -> Target {
+    Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|arg| (*arg).to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    }
+}
+
+fn display_items() -> Vec<Item> {
+    let mut items = Vec::new();
+    if let Ok(output) = Command::new("niructl").args(["display", "list"]).output() {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let fields: Vec<&str> = line.split('\t').collect();
+                if fields.len() < 2 || fields[0].is_empty() {
+                    continue;
+                }
+                items.push(Item {
+                    key: format!("display:{}", fields[0]),
+                    group: "Displays".into(),
+                    name: format!("Display: {}", fields[0]),
+                    detail: format!("{} output(s) · preview with revert", fields[1]),
+                    favorite: false,
+                    target: spawn_niructl(&["display", "preview", fields[0]]),
+                });
+            }
+        }
+    }
+    if let Ok(output) = Command::new("niructl").args(["display", "status"]).output() {
+        let status = String::from_utf8_lossy(&output.stdout);
+        if status.trim_start().starts_with("display preview ") && !status.contains("off") {
+            items.push(Item {
+                key: "display:keep".into(),
+                group: "Displays".into(),
+                name: "Keep display layout".into(),
+                detail: "Confirm the preview".into(),
+                favorite: false,
+                target: spawn_niructl(&["display", "keep"]),
+            });
+            items.push(Item {
+                key: "display:revert".into(),
+                group: "Displays".into(),
+                name: "Revert display layout".into(),
+                detail: "Return to the previous layout".into(),
+                favorite: false,
+                target: spawn_niructl(&["display", "revert"]),
+            });
+        }
+    }
+    if items.is_empty() {
+        items.push(Item {
+            key: "display:none".into(),
+            group: "Displays".into(),
+            name: "No display profiles".into(),
+            detail: "Create one with niructl display save NAME".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
+    items
+}
+
 fn bluetooth_info(name: &str, detail: &str) -> Item {
     Item {
         key: "bluetooth:status".into(),
@@ -453,6 +517,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
 
     items.extend(microphone_items());
     items.extend(bluetooth_items());
+    items.extend(display_items());
 
     if let Ok(out) = Command::new("niructl")
         .args(["explain", "--launcher"])
@@ -876,6 +941,8 @@ impl Ui {
             items.extend(microphone_items());
         } else if mode == "bluetooth" {
             items.extend(bluetooth_items());
+        } else if mode == "displays" {
+            items.extend(display_items());
         } else if mode == "windows" {
             items.extend(window_items(&c, root));
         } else {
@@ -1507,12 +1574,13 @@ fn main() {
             }
             Ok(())
         }
-        "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" => {
+        "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--windows" => "windows",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
+                "--displays" => "displays",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -1522,13 +1590,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--check-config|--list|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--check-config|--list|--version]"
             );
             std::process::exit(2);
         }

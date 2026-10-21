@@ -35,6 +35,7 @@ nirulauncher --actions
 nirulauncher --windows
 nirulauncher --microphone
 nirulauncher --bluetooth
+nirulauncher --displays
 nirulauncher --check-config
 ```
 
@@ -47,6 +48,8 @@ with arrows/search and Enter. Opening it changes nothing. Gain changes preserve
 mute, and missing inputs are explained. These controls also appear in `--actions`.
 `--bluetooth` lists adapter power and paired device connect/disconnect actions;
 opening it performs no connection. Unknown battery is not shown as 0%.
+`--displays` lists saved display profiles and preview/keep/revert actions; opening
+it never applies a layout.
 The Diagnostics group explains unavailable services from `niructl explain`, with
 a direct action to the full `nirux doctor` report. Work modes start timed
 focus/presentation DND and keep-awake; launcher recipes run configured app
