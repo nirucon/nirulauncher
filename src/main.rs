@@ -295,6 +295,73 @@ fn bluetooth_items() -> Vec<Item> {
     items
 }
 
+fn power_items() -> Vec<Item> {
+    let Ok(output) = Command::new("niructl")
+        .args(["powerprofile", "status"])
+        .output()
+    else {
+        return vec![Item {
+            key: "power:unavailable".into(),
+            group: "Power".into(),
+            name: "Power profiles unavailable".into(),
+            detail: "niructl did not respond".into(),
+            favorite: false,
+            target: Target::Info,
+        }];
+    };
+    if !output.status.success() {
+        return vec![Item {
+            key: "power:unavailable".into(),
+            group: "Power".into(),
+            name: "Power profiles unavailable".into(),
+            detail: "power-profiles-daemon is not available".into(),
+            favorite: false,
+            target: Target::Info,
+        }];
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let active = text
+        .lines()
+        .find_map(|line| line.strip_prefix("active="))
+        .unwrap_or("unknown");
+    let source = text
+        .lines()
+        .find_map(|line| line.strip_prefix("power="))
+        .unwrap_or("unknown");
+    let mut items = Vec::new();
+    for line in text.lines() {
+        let Some(profile) = line.strip_prefix("profile=") else {
+            continue;
+        };
+        if profile.is_empty() {
+            continue;
+        }
+        items.push(Item {
+            key: format!("power:{profile}"),
+            group: "Power".into(),
+            name: format!("Power profile: {profile}"),
+            detail: if profile == active {
+                format!("Current · power source {source}")
+            } else {
+                format!("Use this profile · source {source}")
+            },
+            favorite: false,
+            target: spawn_niructl(&["powerprofile", "set", profile]),
+        });
+    }
+    if items.is_empty() {
+        items.push(Item {
+            key: "power:none".into(),
+            group: "Power".into(),
+            name: "No power profiles".into(),
+            detail: "power-profiles-daemon reported no profiles".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
+    items
+}
+
 fn spawn_niructl(args: &[&str]) -> Target {
     Target::Spawn {
         argv: std::iter::once("niructl".to_string())
@@ -518,6 +585,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
     items.extend(microphone_items());
     items.extend(bluetooth_items());
     items.extend(display_items());
+    items.extend(power_items());
 
     if let Ok(out) = Command::new("niructl")
         .args(["explain", "--launcher"])
@@ -943,6 +1011,8 @@ impl Ui {
             items.extend(bluetooth_items());
         } else if mode == "displays" {
             items.extend(display_items());
+        } else if mode == "power" {
+            items.extend(power_items());
         } else if mode == "windows" {
             items.extend(window_items(&c, root));
         } else {
@@ -1574,13 +1644,15 @@ fn main() {
             }
             Ok(())
         }
-        "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays" => {
+        "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays"
+        | "--power" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--windows" => "windows",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
                 "--displays" => "displays",
+                "--power" => "power",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -1590,13 +1662,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--version]"
             );
             std::process::exit(2);
         }
