@@ -188,6 +188,124 @@ fn microphone_items() -> Vec<Item> {
     items
 }
 
+fn bluetooth_items() -> Vec<Item> {
+    let mut items = Vec::new();
+    let Ok(output) = Command::new("niructl")
+        .args(["bluetooth", "status"])
+        .output()
+    else {
+        return vec![bluetooth_info(
+            "Bluetooth unavailable",
+            "niructl did not respond",
+        )];
+    };
+    if !output.status.success() {
+        return vec![bluetooth_info(
+            "Bluetooth unavailable",
+            "BlueZ status failed",
+        )];
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut powered = false;
+    let mut adapter = false;
+    let mut devices = Vec::new();
+    for line in text.lines() {
+        if line == "powered=true" {
+            powered = true;
+        }
+        if let Some(value) = line.strip_prefix("adapter=") {
+            adapter = !value.is_empty();
+        }
+        if let Some(rest) = line.strip_prefix("device=") {
+            let fields: Vec<&str> = rest.split('\t').collect();
+            if fields.len() == 4 && !fields[0].is_empty() {
+                devices.push((
+                    fields[0].to_string(),
+                    fields[1].to_string(),
+                    fields[2] == "true",
+                    fields[3].to_string(),
+                ));
+            }
+        }
+    }
+    if !adapter {
+        return vec![bluetooth_info(
+            "No Bluetooth adapter",
+            "No Bluetooth hardware was reported",
+        )];
+    }
+    items.push(Item {
+        key: "action:bluetooth:power".into(),
+        group: "Bluetooth".into(),
+        name: if powered {
+            "Turn Bluetooth off".into()
+        } else {
+            "Turn Bluetooth on".into()
+        },
+        detail: if powered {
+            "Currently on"
+        } else {
+            "Currently off"
+        }
+        .into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: vec![
+                "niructl".into(),
+                "bluetooth".into(),
+                "power".into(),
+                "toggle".into(),
+            ],
+            terminal: false,
+            path: None,
+        },
+    });
+    if devices.is_empty() {
+        items.push(bluetooth_info(
+            "No paired devices",
+            "Pair devices with your Bluetooth manager first",
+        ));
+    }
+    for (mac, name, connected, battery) in devices {
+        items.push(Item {
+            key: format!("action:bluetooth:{mac}"),
+            group: "Bluetooth".into(),
+            name: format!(
+                "{}: {name}",
+                if connected { "Disconnect" } else { "Connect" }
+            ),
+            detail: if battery.is_empty() {
+                "Paired device".into()
+            } else {
+                format!("Battery {battery}% · paired")
+            },
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec![
+                    "niructl".into(),
+                    "bluetooth".into(),
+                    if connected { "disconnect" } else { "connect" }.into(),
+                    mac,
+                ],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    items
+}
+
+fn bluetooth_info(name: &str, detail: &str) -> Item {
+    Item {
+        key: "bluetooth:status".into(),
+        group: "Bluetooth".into(),
+        name: name.into(),
+        detail: detail.into(),
+        favorite: false,
+        target: Target::Info,
+    }
+}
+
 fn microphone_info(name: &str, detail: &str) -> Item {
     Item {
         key: "microphone:status".into(),
@@ -334,6 +452,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
     }
 
     items.extend(microphone_items());
+    items.extend(bluetooth_items());
 
     if let Ok(out) = Command::new("niructl")
         .args(["explain", "--launcher"])
@@ -755,6 +874,8 @@ impl Ui {
             items.extend(app_items(apps));
         } else if mode == "microphone" {
             items.extend(microphone_items());
+        } else if mode == "bluetooth" {
+            items.extend(bluetooth_items());
         } else if mode == "windows" {
             items.extend(window_items(&c, root));
         } else {
@@ -1386,11 +1507,12 @@ fn main() {
             }
             Ok(())
         }
-        "--apps" | "--actions" | "--windows" | "--microphone" => {
+        "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--windows" => "windows",
                 "--microphone" => "microphone",
+                "--bluetooth" => "bluetooth",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -1400,13 +1522,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--check-config|--list|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--check-config|--list|--version]"
             );
             std::process::exit(2);
         }
