@@ -83,6 +83,8 @@ struct Ui {
     rows: usize,
     width: u16,
     height: u16,
+    row_height: i16,
+    padding: i16,
     confirm: Option<Action>,
     error: String,
     selection: Atom,
@@ -548,12 +550,15 @@ impl Ui {
         let (px, py) = point(&c, root);
         let monitor = monitor_at(&c, root, px, py);
         let rows = items.len().min(cfg.max_rows).max(1);
-        let header = cfg.row_height + cfg.padding * 2;
-        let footer = cfg.row_height;
+        let (_, line_height) = Renderer::measure(cfg.font_path.as_deref(), cfg.font_size)?;
+        let row_height = cfg.row_height.max(line_height + 8);
+        let padding = cfg.padding.max((line_height / 2).max(8));
+        let header = row_height + padding * 2;
+        let footer = row_height;
         let width = cfg.width.min((monitor.w as i16).max(200) as u16);
-        let height = (header + footer + rows as i16 * cfg.row_height)
+        let height = (header + footer + rows as i16 * row_height)
             .min(monitor.h as i16)
-            .max(header + footer + cfg.row_height);
+            .max(header + footer + row_height);
         let x = (monitor.x + (monitor.w as i16 - width as i16) / 2).max(monitor.x);
         let y = (monitor.y + (monitor.h as i16 - height) / 2).max(monitor.y);
         let win = c.generate_id()?;
@@ -673,6 +678,8 @@ impl Ui {
             rows,
             width,
             height: height as u16,
+            row_height,
+            padding,
             confirm: None,
             error: String::new(),
             selection,
@@ -684,8 +691,8 @@ impl Ui {
 
     fn draw(&mut self) -> Result<()> {
         let pal = self.cfg.palette;
-        let pad = self.cfg.padding;
-        let row = self.cfg.row_height;
+        let pad = self.padding;
+        let row = self.row_height;
         let header_h = row + pad * 2;
         self.renderer.clear(&self.c, self.gc, pal.background)?;
         self.renderer.fill(
@@ -754,6 +761,17 @@ impl Ui {
                     },
                     bg,
                 )?;
+                self.renderer.fill(
+                    &self.c,
+                    self.gc,
+                    Rectangle {
+                        x: pad / 2,
+                        y,
+                        width: 3,
+                        height: row as u16,
+                    },
+                    pal.accent,
+                )?;
             }
             let name_colour = pal.foreground;
             let detail_colour = pal.muted;
@@ -794,7 +812,7 @@ impl Ui {
         } else {
             pal.muted
         };
-        let fy = self.height as i16 - self.cfg.padding / 2 - 2;
+        let fy = self.height as i16 - self.padding / 2 - 2;
         self.renderer.line(
             &self.c,
             self.gc,
@@ -1020,11 +1038,11 @@ impl Ui {
     }
 
     fn row_at(&self, y: i16) -> Option<usize> {
-        let header = self.cfg.row_height + self.cfg.padding * 2;
+        let header = self.row_height + self.padding * 2;
         if y < header {
             return None;
         }
-        let line = ((y - header) / self.cfg.row_height) as usize;
+        let line = ((y - header) / self.row_height) as usize;
         if line >= self.rows {
             return None;
         }

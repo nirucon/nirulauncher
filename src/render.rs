@@ -42,6 +42,17 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Font metrics without allocating a pixmap. The launcher uses this to
+    /// size rows before its window and backing store exist.
+    pub fn measure(font_path: Option<&str>, font_size: f32) -> crate::Result<(i16, i16)> {
+        let font = load_font(font_path)?;
+        let scaled = font.as_scaled(PxScale::from(font_size));
+        Ok((
+            scaled.h_advance(font.glyph_id('M')).ceil() as i16,
+            scaled.height().ceil() as i16,
+        ))
+    }
+
     /// Whether the loaded font can draw a glyph.
     ///
     /// A missing glyph renders as a blank box, so the bar checks the icons it

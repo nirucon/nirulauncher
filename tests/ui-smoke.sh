@@ -70,4 +70,28 @@ while kill -0 "$LAUNCHER" 2>/dev/null; do
   sleep 0.05
 done
 LAUNCHER=""
+# Large fonts must grow rows instead of clipping. With max_rows=3 the window
+# must be taller than the old fixed 26 px row layout.
+mkdir -p "$XDG_CONFIG_HOME/nirulauncher"
+printf 'max_rows = 3\nfont_size = 26.0\nrow_height = 26\n' > "$XDG_CONFIG_HOME/nirulauncher/config.toml"
+"$BIN" --apps >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo "FAIL large-font launcher did not map"; exit 1; }
+  sleep 0.05
+done
+WIN=$(xdotool search --name '^NIRULANCHER$' | head -1)
+HEIGHT=$(xdotool getwindowgeometry --shell "$WIN" | sed -n 's/^HEIGHT=//p')
+[ -n "$HEIGHT" ] && [ "$HEIGHT" -gt 180 ] || {
+  echo "FAIL large font did not grow the launcher (height=$HEIGHT)"
+  exit 1
+}
+xdotool key Escape
+i=0
+while kill -0 "$LAUNCHER" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo "FAIL large-font Escape did not close"; exit 1; }
+  sleep 0.05
+done
+LAUNCHER=""
 echo "PASS ui-smoke"
