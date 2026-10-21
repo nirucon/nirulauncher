@@ -39,7 +39,9 @@ nirulauncher --check-config
 `--actions` groups System, Display, Power, Appearance, Workspaces and Windows
 results; applications follow. Rows grow with the configured font, and the
 selected row uses a 3 px theme-accent focus bar. Audio outputs and microphones
-are listed as actions through `niructl audio`, alongside output/microphone mute. Lock, screensaver, reload, DND, idle inhibition,
+are listed as actions through `niructl audio`, alongside output/microphone mute.
+The Diagnostics group explains unavailable services from `niructl explain`, with
+a direct action to the full `nirux doctor` report. Lock, screensaver, reload, DND, idle inhibition,
 brightness, night light, suspend, themes, workspaces and confirmed
 logout/reboot/shutdown use the documented component CLIs. Applications with
 `Terminal=true` use the configured `terminal` argv. Desktop `Exec` lines are

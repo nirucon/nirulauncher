@@ -44,6 +44,7 @@ enum Target {
     },
     Focus(Window),
     Confirm(Action),
+    Info,
 }
 
 #[derive(Clone)]
@@ -237,6 +238,63 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             }
         }
     }
+
+    if let Ok(out) = Command::new("niructl")
+        .args(["explain", "--launcher"])
+        .output()
+    {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let mut fields = line.splitn(4, '\t');
+                let level = fields.next().unwrap_or("");
+                let name = fields.next().unwrap_or("");
+                let detail = fields.next().unwrap_or("");
+                let action = fields.next().unwrap_or("");
+                if name.is_empty() {
+                    continue;
+                }
+                let target = match action {
+                    "doctor" => Target::Spawn {
+                        argv: vec!["nirux".into(), "doctor".into()],
+                        terminal: true,
+                        path: None,
+                    },
+                    "audio" => Target::Spawn {
+                        argv: vec!["niructl".into(), "audio".into(), "outputs".into()],
+                        terminal: true,
+                        path: None,
+                    },
+                    "dnd" => niructl(&["dnd", "toggle"]),
+                    "reload" => niructl(&["reload"]),
+                    _ => Target::Info,
+                };
+                items.push(Item {
+                    key: format!("diagnostic:{name}"),
+                    group: "Diagnostics".into(),
+                    name: name.into(),
+                    detail: if level == "WARN" {
+                        format!("Needs attention: {detail}")
+                    } else {
+                        detail.into()
+                    },
+                    favorite: false,
+                    target,
+                });
+            }
+        }
+    }
+    items.push(Item {
+        key: "action:diagnostics".into(),
+        group: "System".into(),
+        name: "Run diagnostics".into(),
+        detail: "Open the full NIRUX health report".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: vec!["nirux".into(), "doctor".into()],
+            terminal: true,
+            path: None,
+        },
+    });
 
     let mut wallpaper = std::collections::HashMap::new();
     if let Ok(out) = Command::new("niructl")
@@ -917,6 +975,7 @@ impl Ui {
                 self.draw()?;
                 Ok(true)
             }
+            Target::Info => Ok(true),
             Target::Focus(window) => {
                 let atom = intern(&self.c, "_NET_ACTIVE_WINDOW")?;
                 let event =
