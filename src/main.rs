@@ -994,6 +994,20 @@ fn point(c: &RustConnection, root: Window) -> (i16, i16) {
         .unwrap_or((0, 0))
 }
 
+fn wait_until_viewable(c: &RustConnection, win: Window) -> Result<()> {
+    c.flush()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if c.get_window_attributes(win)?.reply()?.map_state == MapState::VIEWABLE {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("window manager did not map the launcher; cannot acquire focus".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 impl Ui {
     fn new(mode: &str) -> Result<Self> {
         let cfg = Config::load()?;
@@ -1120,6 +1134,10 @@ impl Ui {
         }
         c.set_selection_owner(win, selection, x11rb::CURRENT_TIME)?;
         c.map_window(win)?;
+        // A managed MapWindow becomes a MapRequest to the WM, not an
+        // immediate map. Grabbing/focusing before its MapNotify causes
+        // GrabNotViewable/BadMatch (especially visible in a slower VM).
+        wait_until_viewable(&c, win)?;
         // Input isolation while open, but never an override-redirect window:
         // the session lock remains above and can still take over.
         let _ = c.grab_keyboard(
@@ -1683,6 +1701,77 @@ fn main() {
 mod input_tests {
     use super::{apply_caps, keyboard_level, keyboard_symbol};
     use x11rb::protocol::xproto::KeyButMask;
+
+    #[test]
+    #[ignore = "requires a private X server without another window manager"]
+    fn focus_waits_for_window_manager_mapping() {
+        use super::*;
+        let (wm, screen) = x11rb::connect(None).unwrap();
+        let root = wm.setup().roots[screen].root;
+        wm.change_window_attributes(
+            root,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_REDIRECT),
+        )
+        .unwrap()
+        .check()
+        .unwrap();
+        let (client, _) = x11rb::connect(None).unwrap();
+        let win = client.generate_id().unwrap();
+        client
+            .create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                200,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        client.map_window(win).unwrap();
+        client.flush().unwrap();
+        assert_eq!(
+            client
+                .get_window_attributes(win)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .map_state,
+            MapState::UNMAPPED
+        );
+        // Prove this fixture reproduces the original startup failure.
+        assert!(client
+            .set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .is_err());
+        let manager = std::thread::spawn(move || loop {
+            if let Event::MapRequest(event) = wm.wait_for_event().unwrap() {
+                assert_eq!(event.window, win);
+                std::thread::sleep(std::time::Duration::from_millis(75));
+                wm.map_window(win).unwrap().check().unwrap();
+                return wm;
+            }
+        });
+        super::wait_until_viewable(&client, win).unwrap();
+        client
+            .set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        assert_eq!(
+            client.get_input_focus().unwrap().reply().unwrap().focus,
+            win
+        );
+        let _wm = manager.join().unwrap();
+        client.destroy_window(win).unwrap().check().unwrap();
+    }
 
     #[test]
     fn levels_cover_shift_and_altgr() {

@@ -24,6 +24,16 @@ Type=Application
 Name=Test App
 Exec=$T/fakeapp --one "two words"
 DESKTOP
+# The large-font check below needs three rows. Do not depend on whichever
+# system .desktop files happen to be installed in the test distribution.
+for fixture in one two; do
+  cat > "$T/data/applications/layout-$fixture.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Layout fixture $fixture
+Exec=$T/fakeapp
+DESKTOP
+done
 Xvfb :98 -screen 0 1280x800x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
 XVFB_PID=$!
 i=0
