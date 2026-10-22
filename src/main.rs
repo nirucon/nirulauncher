@@ -104,6 +104,25 @@ fn set_utf8(c: &RustConnection, win: Window, atom: Atom, value: &str) -> Result<
 
 /// Keyboard-accessible input controls. Device IDs and state come from niructl;
 /// no microphone or mute setting changes just by opening this view.
+fn short_device(name: &str) -> String {
+    let tail = name
+        .rsplit_once("Audio Controller ")
+        .map(|(_, tail)| tail)
+        .unwrap_or(name)
+        .trim();
+    let tail = tail
+        .strip_prefix("Smart Sound Technology ")
+        .unwrap_or(tail)
+        .trim();
+    let mut chars = tail.chars();
+    let short: String = chars.by_ref().take(44).collect();
+    if chars.next().is_some() {
+        format!("{short}…")
+    } else {
+        short
+    }
+}
+
 fn microphone_items() -> Vec<Item> {
     let mut items = Vec::new();
     for (key, name, detail, args) in [
@@ -158,7 +177,7 @@ fn microphone_items() -> Vec<Item> {
                 items.push(Item {
                     key: format!("action:audio:sources:{id}"),
                     group: "Audio".into(),
-                    name: format!("Microphone: {name}"),
+                    name: format!("Mic: {}", short_device(name)),
                     detail: if default {
                         "Current input"
                     } else {
@@ -590,7 +609,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                     items.push(Item {
                         key: format!("action:audio:{kind}:{id}"),
                         group: "Audio".into(),
-                        name: format!("{label}: {name}"),
+                        name: format!("{label}: {}", short_device(name)),
                         detail: if default {
                             "Current device".into()
                         } else {
@@ -1969,6 +1988,22 @@ mod input_tests {
         assert_eq!(super::filtered(&items, "windows", &usage), vec![0]);
         assert_eq!(super::filtered(&items, "editor", &usage), vec![0]);
         assert!(super::filtered(&items, "missing", &usage).is_empty());
+    }
+
+    #[test]
+    fn long_device_names_are_shortened() {
+        assert_eq!(
+            super::short_device(
+                "Tiger Lake-LP Smart Sound Technology Audio Controller Digital Microphone"
+            ),
+            "Digital Microphone"
+        );
+        assert_eq!(
+            super::short_device(
+                "Tiger Lake-LP Smart Sound Technology Audio Controller HDMI / DisplayPort 3 Output"
+            ),
+            "HDMI / DisplayPort 3 Output"
+        );
     }
 
     #[test]
