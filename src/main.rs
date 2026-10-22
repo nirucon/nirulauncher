@@ -1642,7 +1642,7 @@ impl Ui {
                         }
                         _ => false,
                     };
-                    if !handled {
+                    if !handled && is_text_key(key) {
                         if let Some(ch) = char::from_u32(key) {
                             if !ch.is_control() && !ch.is_whitespace() || ch == ' ' {
                                 self.query.push(ch);
@@ -1737,6 +1737,14 @@ fn spawn_command(
 }
 
 /// Keyboard level: base, Shift, AltGr (MOD5), then Shift+AltGr.
+fn is_text_key(key: u32) -> bool {
+    // Latin-1 printable range covers the launcher's documented input support.
+    // Modifier and function keysyms (0xfe00+) are never search text; 0xffe3
+    // (Control_L) is also the printable U+FFE3 character, which caused Ctrl to
+    // clear the menu.
+    (0x20..=0xff).contains(&key)
+}
+
 fn keyboard_level(state: KeyButMask) -> usize {
     let shift = state.contains(KeyButMask::SHIFT);
     let altgr = state.contains(KeyButMask::MOD5);
@@ -1961,6 +1969,15 @@ mod input_tests {
         assert_eq!(super::filtered(&items, "windows", &usage), vec![0]);
         assert_eq!(super::filtered(&items, "editor", &usage), vec![0]);
         assert!(super::filtered(&items, "missing", &usage).is_empty());
+    }
+
+    #[test]
+    fn modifier_keys_are_not_search_text() {
+        assert!(!super::is_text_key(0xffe3), "Ctrl is not text");
+        assert!(!super::is_text_key(0xffe1), "Shift is not text");
+        assert!(!super::is_text_key(0xff52), "Arrow is not text");
+        assert!(super::is_text_key(0x70), "p is text");
+        assert!(super::is_text_key(0xe5), "å is text");
     }
 
     #[test]
