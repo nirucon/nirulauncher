@@ -38,6 +38,8 @@ Super+P opens application search. Super+Shift+P opens applications, windows and
 grouped actions. `--windows` switches directly to an open window.
 
 `--actions` groups System, Display, Power, Appearance, Workspaces and Windows.
+The Appearance group includes a compositor toggle for picom transparency and
+shadows.
 It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
 actions, display-profile preview/keep/revert, power profiles, diagnostics, work
 modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,

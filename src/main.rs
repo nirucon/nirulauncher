@@ -482,6 +482,11 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             "Toggle the manual night light",
             "nightlight toggle",
         ),
+        (
+            "Compositor",
+            "Toggle picom transparency and shadows",
+            "compositor toggle",
+        ),
         ("Suspend", "Lock, then suspend", "suspend"),
         ("Mute audio", "Toggle the default output", "audio mute"),
     ] {
@@ -494,6 +499,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             "System"
         } else if first == "audio" {
             "Audio"
+        } else if first == "compositor" {
+            "Appearance"
         } else if first == "mode" {
             "Work modes"
         } else {
