@@ -487,6 +487,19 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             "Toggle picom transparency and shadows",
             "compositor toggle",
         ),
+        ("Layout: Tile", "Super+T", "layout tile"),
+        ("Layout: Left stack", "Super+Y", "layout left"),
+        ("Layout: Monocle", "Super+M", "layout monocle"),
+        ("Layout: Centered", "Super+C", "layout centered"),
+        (
+            "Layout: Centered floating",
+            "Super+U",
+            "layout centeredfloat",
+        ),
+        ("Layout: Floating", "Super+F", "layout floating"),
+        ("Layout: Fibonacci", "Super+Ctrl+E", "layout fibonacci"),
+        ("Previous layout", "Super+Ctrl+,", "layout_prev"),
+        ("Next layout", "Super+Ctrl+.", "layout_next"),
         ("Suspend", "Lock, then suspend", "suspend"),
         ("Mute audio", "Toggle the default output", "audio mute"),
     ] {
@@ -501,6 +514,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             "Audio"
         } else if first == "compositor" {
             "Appearance"
+        } else if first == "layout" {
+            "Layouts"
         } else if first == "mode" {
             "Work modes"
         } else {
