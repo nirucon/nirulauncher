@@ -41,6 +41,8 @@ grouped actions. `--windows` switches directly to an open window.
 The Appearance group includes a compositor toggle for picom transparency and
 shadows. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
 Centered, Centered floating, Floating and Fibonacci, plus previous/next.
+The list is alphabetical, with up to five pinned favourites first. Press
+Ctrl+P on a row to pin or unpin it.
 It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
 actions, display-profile preview/keep/revert, power profiles, diagnostics, work
 modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,

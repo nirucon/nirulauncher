@@ -984,13 +984,46 @@ fn record_usage(key: &str) {
     let _ = std::fs::write(usage_path(), text);
 }
 
+fn favorites_path() -> std::path::PathBuf {
+    usage_path().with_file_name("favorites.tsv")
+}
+
+fn load_runtime_favorites() -> Vec<String> {
+    std::fs::read_to_string(favorites_path())
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(5)
+        .map(str::to_string)
+        .collect()
+}
+
+fn save_runtime_favorites(keys: &[String]) {
+    let path = favorites_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text: String = keys.iter().take(5).map(|key| format!("{key}\n")).collect();
+    let _ = std::fs::write(path, text);
+}
+
 fn filtered(
     items: &[Item],
     query: &str,
-    usage: &std::collections::HashMap<String, u64>,
+    _usage: &std::collections::HashMap<String, u64>,
 ) -> Vec<usize> {
+    let mut favorites: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.favorite)
+        .map(|(index, _)| index)
+        .collect();
+    favorites.sort_by_key(|index| items[*index].label().to_lowercase());
+    favorites.truncate(5);
+    let pinned: std::collections::HashSet<usize> = favorites.into_iter().collect();
     let q = query.trim().to_lowercase();
-    let mut hits: Vec<(bool, u8, u64, usize)> = items
+    let mut hits: Vec<(bool, u8, String, usize)> = items
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
@@ -1008,14 +1041,13 @@ fn filtered(
             } else {
                 return None;
             };
-            let last_used = usage.get(&item.key).copied().unwrap_or(0);
-            Some((!item.favorite, rank, last_used, i))
+            Some((!pinned.contains(&i), rank, label.clone(), i))
         })
         .collect();
     hits.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.2.cmp(&b.2))
             .then_with(|| a.3.cmp(&b.3))
     });
     hits.into_iter().map(|(_, _, _, i)| i).collect()
@@ -1114,6 +1146,11 @@ impl Ui {
                     || favorite.eq_ignore_ascii_case(&item.name)
                     || favorite == &item.label()
             });
+        }
+        for key in load_runtime_favorites() {
+            if let Some(item) = items.iter_mut().find(|item| item.key == key) {
+                item.favorite = true;
+            }
         }
         if items.is_empty() {
             return Err("no launchable applications or actions found".into());
@@ -1380,7 +1417,7 @@ impl Ui {
         } else if !self.error.is_empty() {
             self.error.clone()
         } else {
-            "Enter launch · Esc close · ↑↓ move".to_string()
+            "Enter launch · Esc close · ↑↓ move · Ctrl+P favorite".to_string()
         };
         let footer_colour = if self.confirm.is_some() {
             pal.warning
@@ -1402,6 +1439,36 @@ impl Ui {
         self.renderer
             .present(&self.c, self.gc, self.win, self.width)?;
         self.c.flush()?;
+        Ok(())
+    }
+
+    fn toggle_favorite(&mut self) -> Result<()> {
+        let Some(&index) = self.filtered.get(self.selected) else {
+            return Ok(());
+        };
+        let key = self.items[index].key.clone();
+        let mut keys = load_runtime_favorites();
+        if self.items[index].favorite {
+            self.items[index].favorite = false;
+            keys.retain(|candidate| candidate != &key);
+            save_runtime_favorites(&keys);
+            self.error.clear();
+        } else {
+            let count = self.items.iter().filter(|item| item.favorite).count();
+            if count >= 5 {
+                self.error = "Favorites are limited to 5".into();
+                self.draw()?;
+                return Ok(());
+            }
+            self.items[index].favorite = true;
+            if !keys.iter().any(|candidate| candidate == &key) {
+                keys.push(key);
+            }
+            save_runtime_favorites(&keys);
+            self.error.clear();
+        }
+        self.refilter();
+        self.draw()?;
         Ok(())
     }
 
@@ -1521,6 +1588,10 @@ impl Ui {
             match event {
                 Event::KeyPress(e) => {
                     let (key, shift) = key_text(&self.c, e.detail, e.state);
+                    if e.state.contains(KeyButMask::CONTROL) && key == 0x70 {
+                        self.toggle_favorite()?;
+                        continue;
+                    }
                     let handled = match key {
                         0xff1b => {
                             if self.confirm.take().is_some() {
@@ -1880,7 +1951,7 @@ mod input_tests {
         usage.insert("c".to_string(), 20);
         usage.insert("a".to_string(), 10);
         let order = super::filtered(&items, "", &usage);
-        assert_eq!(order, vec![1, 2, 0], "favourite, then most recently used");
+        assert_eq!(order, vec![1, 0, 2], "favourites first, then alphabetical");
     }
 
     #[test]
