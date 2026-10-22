@@ -604,6 +604,60 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         }
     }
 
+    // Read-only shortcut catalogue. Actions remain normal rows above; this
+    // keeps every default binding discoverable without inventing a second
+    // command path. Keys stay in the detail column so long combinations remain
+    // readable and truncate consistently with the rest of the launcher.
+    for (name, key) in [
+        ("Terminal", "Super+Enter"),
+        ("Alternative terminal", "Super+Shift+Enter"),
+        ("Browser", "Super+B"),
+        ("Application launcher", "Super+P"),
+        ("Actions and layouts", "Super+Shift+P / B"),
+        ("Window switcher", "Super+W"),
+        ("File manager", "Super+Shift+F"),
+        ("Lock screen", "Super+Escape"),
+        ("Reload", "Super+R"),
+        ("Reload alternate", "Super+Shift+R"),
+        ("Toggle DND", "Super+Shift+D"),
+        ("Toggle idle inhibition", "Super+Shift+C"),
+        ("Save session", "Super+Shift+W"),
+        ("Toggle gaps", "Super+G"),
+        ("Night light", "Super+N"),
+        ("Close window", "Super+Q"),
+        ("Log out", "Super+Ctrl+Shift+Q"),
+        ("Previous / next window", "Super+J / K"),
+        ("Focus by arrow", "Super+Arrows"),
+        ("Move window", "Super+Shift+Arrows"),
+        ("Previous / next monitor", "Super+, / ."),
+        ("Move to monitor", "Super+Shift+, / ."),
+        ("Workspace 1-9 / 10", "Super+1…9 / 0"),
+        ("Move to workspace", "Super+Shift+1…9 / 0"),
+        ("Toggle workspace view", "Super+Ctrl+1…9"),
+        ("Move and toggle workspace", "Super+Ctrl+Shift+1…9"),
+        ("Next / previous workspace", "Super+Tab / Shift+Tab"),
+        ("Move floating window", "Super+Ctrl+Arrows"),
+        ("Resize floating window", "Super+Ctrl+Shift+Arrows"),
+        ("Fullscreen", "Super+Shift+E"),
+        ("Scratchpad", "Super+Shift+S"),
+        ("Toggle floating", "Super+Shift+Space"),
+        ("Swap windows", "Super+Shift+J / K"),
+        ("Master ratio", "Super+H / L"),
+        ("Master count", "Super+I / D"),
+        ("Screenshots", "Super+Print / Print"),
+        ("Volume and media", "XF86 media keys"),
+        ("Brightness", "XF86 brightness keys"),
+        ("Mouse move / resize", "Super+left / right drag"),
+    ] {
+        items.push(Item {
+            key: format!("shortcut:{name}"),
+            group: "Shortcuts".into(),
+            name: name.into(),
+            detail: key.into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
     items.extend(microphone_items());
     items.extend(bluetooth_items());
     items.extend(display_items());
