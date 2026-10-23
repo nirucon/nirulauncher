@@ -33,6 +33,7 @@ enum Action {
     Logout,
     Reboot,
     Shutdown,
+    ResetBar,
 }
 
 #[derive(Clone)]
@@ -863,6 +864,14 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             target: niructl(&["tag", &ws.to_string()]),
         });
     }
+    items.push(Item {
+        key: "action:reset-bar".into(),
+        group: "Appearance".into(),
+        name: "Reset bar configuration…".into(),
+        detail: "Restore current NIRUBAR defaults; a backup is kept".into(),
+        favorite: false,
+        target: Target::Confirm(Action::ResetBar),
+    });
     for (name, detail, action) in [
         ("Log out…", "Requires confirmation", Action::Logout),
         ("Reboot…", "Requires confirmation", Action::Reboot),
@@ -1466,6 +1475,7 @@ impl Ui {
                     Action::Logout => "log out",
                     Action::Reboot => "reboot",
                     Action::Shutdown => "shut down",
+                    Action::ResetBar => "reset the bar configuration",
                 }
             )
         } else if !self.error.is_empty() {
@@ -1562,18 +1572,22 @@ impl Ui {
         match target {
             Target::Confirm(action) => {
                 if self.confirm.is_some() {
-                    let command = match action {
-                        Action::Logout => "logout",
-                        Action::Reboot => "reboot",
-                        Action::Shutdown => "shutdown",
+                    let commands: Vec<Vec<String>> = match action {
+                        Action::Logout => vec![vec!["niructl".into(), "logout".into()]],
+                        Action::Reboot => vec![vec!["niructl".into(), "reboot".into()]],
+                        Action::Shutdown => vec![vec!["niructl".into(), "shutdown".into()]],
+                        Action::ResetBar => vec![
+                            vec!["nirubar".into(), "--reset-config".into()],
+                            vec!["niructl".into(), "restart-bar".into()],
+                        ],
                     };
-                    if let Err(e) =
-                        spawn_command(&["niructl".into(), command.into()], None, false, &self.cfg)
-                    {
-                        self.error = e;
-                        self.confirm = None;
-                        self.draw()?;
-                        return Ok(true);
+                    for command in commands {
+                        if let Err(e) = spawn_command(&command, None, false, &self.cfg) {
+                            self.error = e;
+                            self.confirm = None;
+                            self.draw()?;
+                            return Ok(true);
+                        }
                     }
                     record_usage(key);
                     self.usage = load_usage();
@@ -2062,6 +2076,7 @@ mod input_tests {
                 && item.group == "Workspaces"
                 && item.name == "Workspace 10"
         }));
+        assert!(items.iter().any(|item| item.key == "action:reset-bar"));
     }
 
     #[test]
