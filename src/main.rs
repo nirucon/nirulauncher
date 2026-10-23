@@ -468,6 +468,85 @@ fn microphone_info(name: &str, detail: &str) -> Item {
     }
 }
 
+fn shortcut_key_label(raw: &str) -> String {
+    raw.split('+')
+        .map(|part| match part {
+            "super" => "Super",
+            "ctrl" => "Ctrl",
+            "shift" => "Shift",
+            "alt" => "Alt",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+fn shortcut_action_label(action: &str) -> String {
+    let name = match action {
+        "terminal" => "Terminal",
+        "terminal_alt" => "Alternative terminal",
+        "browser" => "Browser",
+        "launcher" => "Application launcher",
+        "launcher_unified" => "Actions and layouts",
+        "window_switcher" => "Window switcher",
+        "lock" => "Lock screen",
+        "reload" => "Reload",
+        "nightlight_toggle" => "Night light",
+        "dnd_toggle" => "Toggle DND",
+        "idle_toggle" => "Toggle idle inhibition",
+        "save_session" => "Save session",
+        "toggle_gaps" => "Toggle gaps",
+        "close" => "Close window",
+        "quit" => "Log out",
+        "toggle_float" => "Toggle floating",
+        "toggle_fullscreen" => "Fullscreen",
+        "scratchpad" => "Scratchpad",
+        "focus_next" => "Next window",
+        "focus_prev" => "Previous window",
+        "move_next" => "Move window next",
+        "move_prev" => "Move window previous",
+        "focusmon -1" => "Previous monitor",
+        "focusmon 1" => "Next monitor",
+        "tagmon -1" => "Move to previous monitor",
+        "tagmon 1" => "Move to next monitor",
+        "tag_next" => "Next workspace",
+        "tag_prev" => "Previous workspace",
+        "layout_next" => "Next layout",
+        "layout_prev" => "Previous layout",
+        "shell nirushot --full" => "Screenshot: full screen",
+        "shell nirushot --region" => "Screenshot: region",
+        "shell nirushot --window" => "Screenshot: window",
+        _ => {
+            if let Some(rest) = action.strip_prefix("media_key ") {
+                return format!("Media key: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("brightness_step ") {
+                return format!("Brightness: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("layout ") {
+                return format!("Layout: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("tag ") {
+                return format!("Workspace: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("movetotag ") {
+                return format!("Move to workspace: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("toggletag ") {
+                return format!("Toggle workspace: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("togglemovetotag ") {
+                return format!("Move and toggle workspace: {rest}");
+            }
+            if let Some(rest) = action.strip_prefix("shell ") {
+                return format!("Custom: {rest}");
+            }
+            return action.replace('_', " ");
+        }
+    };
+    name.into()
+}
+
 fn action_items(cfg: &Config) -> Vec<Item> {
     let mut items = Vec::new();
     let niructl = |args: &[&str]| Target::Spawn {
@@ -635,60 +714,45 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         }
     }
 
-    // Read-only shortcut catalogue. Actions remain normal rows above; this
-    // keeps every default binding discoverable without inventing a second
-    // command path. Keys stay in the detail column so long combinations remain
-    // readable and truncate consistently with the rest of the launcher.
-    for (name, key) in [
-        ("Terminal", "Super+Enter"),
-        ("Alternative terminal", "Super+Shift+Enter"),
-        ("Browser", "Super+B"),
-        ("Application launcher", "Super+P"),
-        ("Actions and layouts", "Super+Shift+P / B"),
-        ("Window switcher", "Super+W"),
-        ("File manager", "Super+Shift+F"),
-        ("Lock screen", "Super+Escape"),
-        ("Reload", "Super+R"),
-        ("Reload alternate", "Super+Shift+R"),
-        ("Toggle DND", "Super+Shift+D"),
-        ("Toggle idle inhibition", "Super+Shift+C"),
-        ("Save session", "Super+Shift+W"),
-        ("Toggle gaps", "Super+G"),
-        ("Night light", "Super+N"),
-        ("Close window", "Super+Q"),
-        ("Log out", "Super+Ctrl+Shift+Q"),
-        ("Previous / next window", "Super+J / K"),
-        ("Focus by arrow", "Super+Arrows"),
-        ("Move window", "Super+Shift+Arrows"),
-        ("Previous / next monitor", "Super+, / ."),
-        ("Move to monitor", "Super+Shift+, / ."),
-        ("Workspace 1-9 / 10", "Super+1…9 / 0"),
-        ("Move to workspace", "Super+Shift+1…9 / 0"),
-        ("Toggle workspace view", "Super+Ctrl+1…9 / 0"),
-        ("Move and toggle workspace", "Super+Ctrl+Shift+1…9 / 0"),
-        ("Next / previous workspace", "Super+Tab / Shift+Tab"),
-        ("Move floating window", "Super+Ctrl+Arrows"),
-        ("Resize floating window", "Super+Ctrl+Shift+Arrows"),
-        ("Fullscreen", "Super+Shift+E"),
-        ("Scratchpad", "Super+Shift+S"),
-        ("Toggle floating", "Super+Shift+Space"),
-        ("Swap windows", "Super+Shift+J / K"),
-        ("Master ratio", "Super+H / L"),
-        ("Master count", "Super+I / D"),
-        ("Screenshots", "Super+Print / Print"),
-        ("Volume and media", "XF86 media keys"),
-        ("Brightness", "XF86 brightness keys"),
-        ("Mouse move / resize", "Super+left / right drag"),
-    ] {
+    // Effective shortcut catalogue from NIRUWM. This includes user overrides
+    // and skips explicit unbinds; the launcher never invents a second truth.
+    let mut shortcuts: Vec<(String, Vec<String>)> = Vec::new();
+    if let Ok(out) = Command::new("niructl").arg("keys").output() {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let Some((key, action)) = line.split_once('\t') else {
+                    continue;
+                };
+                if key.is_empty() || action.is_empty() || action == "unbind" {
+                    continue;
+                }
+                let key = shortcut_key_label(key);
+                if let Some((_, keys)) = shortcuts.iter_mut().find(|(a, _)| a == action) {
+                    keys.push(key);
+                } else {
+                    shortcuts.push((action.to_string(), vec![key]));
+                }
+            }
+        }
+    }
+    for (action, keys) in shortcuts {
         items.push(Item {
-            key: format!("shortcut:{name}"),
+            key: format!("shortcut:{action}"),
             group: "Shortcuts".into(),
-            name: name.into(),
-            detail: key.into(),
+            name: shortcut_action_label(&action),
+            detail: keys.join(" / "),
             favorite: false,
             target: Target::Info,
         });
     }
+    items.push(Item {
+        key: "shortcut:mouse".into(),
+        group: "Shortcuts".into(),
+        name: "Mouse move / resize".into(),
+        detail: "Super+left / right drag".into(),
+        favorite: false,
+        target: Target::Info,
+    });
     items.extend(microphone_items());
     items.extend(bluetooth_items());
     items.extend(display_items());
