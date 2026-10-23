@@ -1888,6 +1888,18 @@ fn main() {
             }
             Ok(())
         }
+        "--list-actions" => match Config::load() {
+            Ok(cfg) => {
+                for item in action_items(&cfg) {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        item.group, item.name, item.detail, item.key
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => Err(e),
+        },
         "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays"
         | "--power" => {
             let mode = match arg {
@@ -1906,13 +1918,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--version]"
+                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--version]"
             );
             std::process::exit(2);
         }
@@ -2040,6 +2052,16 @@ mod input_tests {
         assert_eq!(super::filtered(&items, "windows", &usage), vec![0]);
         assert_eq!(super::filtered(&items, "editor", &usage), vec![0]);
         assert!(super::filtered(&items, "missing", &usage).is_empty());
+    }
+
+    #[test]
+    fn action_list_includes_workspace_ten() {
+        let items = super::action_items(&crate::config::Config::default());
+        assert!(items.iter().any(|item| {
+            item.key == "action:workspace:10"
+                && item.group == "Workspaces"
+                && item.name == "Workspace 10"
+        }));
     }
 
     #[test]
