@@ -853,7 +853,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         target: niructl(&["wallpaper", "follow-theme", next_follow]),
     });
 
-    for ws in 1..=9 {
+    for ws in 1..=10 {
         items.push(Item {
             key: format!("action:workspace:{ws}"),
             group: "Workspaces".into(),
