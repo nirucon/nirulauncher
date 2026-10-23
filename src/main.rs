@@ -1007,6 +1007,29 @@ fn favorites_path() -> std::path::PathBuf {
     usage_path().with_file_name("favorites.tsv")
 }
 
+fn removed_favorites_path() -> std::path::PathBuf {
+    usage_path().with_file_name("favorites-removed.tsv")
+}
+
+fn load_removed_favorites() -> Vec<String> {
+    std::fs::read_to_string(removed_favorites_path())
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn save_removed_favorites(keys: &[String]) {
+    let path = removed_favorites_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text: String = keys.iter().map(|key| format!("{key}\n")).collect();
+    let _ = std::fs::write(path, text);
+}
+
 fn load_runtime_favorites() -> Vec<String> {
     std::fs::read_to_string(favorites_path())
         .unwrap_or_default()
@@ -1159,17 +1182,26 @@ impl Ui {
         } else {
             items.extend(app_items(apps));
         }
+        let runtime_favorites = load_runtime_favorites();
+        let removed_favorites = load_removed_favorites();
         for item in &mut items {
-            item.favorite = cfg.favorites.iter().any(|favorite| {
+            let configured = cfg.favorites.iter().any(|favorite| {
                 favorite == &item.key
                     || favorite.eq_ignore_ascii_case(&item.name)
                     || favorite == &item.label()
             });
+            item.favorite = (configured || runtime_favorites.iter().any(|key| key == &item.key))
+                && !removed_favorites.iter().any(|key| key == &item.key);
         }
-        for key in load_runtime_favorites() {
-            if let Some(item) = items.iter_mut().find(|item| item.key == key) {
-                item.favorite = true;
-            }
+        let mut favorite_items: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.favorite)
+            .map(|(index, _)| index)
+            .collect();
+        favorite_items.sort_by_key(|index| items[*index].label().to_lowercase());
+        for index in favorite_items.into_iter().skip(5) {
+            items[index].favorite = false;
         }
         if items.is_empty() {
             return Err("no launchable applications or actions found".into());
@@ -1409,14 +1441,17 @@ impl Ui {
             let name_colour = pal.foreground;
             let detail_colour = pal.muted;
             let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
-            let label = item.label();
-            let name = truncate(
-                &label,
-                (self.width as i16 - pad * 2) / self.renderer.advance.max(1),
-            );
+            let label = if item.favorite {
+                format!("★ {}", item.label())
+            } else {
+                item.label()
+            };
+            let usable = ((self.width as i16 - pad * 2) / self.renderer.advance.max(1)).max(1);
+            let name_width = (usable * 3 / 5).max(1);
+            let detail_width = usable.saturating_sub(name_width + 1).max(1);
+            let name = truncate(&label, name_width);
             self.renderer
                 .line(&self.c, self.gc, pad, baseline, &name, name_colour, bg)?;
-            let detail_width = (self.width as i16 / 3).max(80) / self.renderer.advance.max(1);
             let detail = truncate(&item.detail, detail_width);
             let dx =
                 (self.width as i16 - pad - detail.chars().count() as i16 * self.renderer.advance)
@@ -1446,6 +1481,8 @@ impl Ui {
             pal.muted
         };
         let fy = self.height as i16 - self.padding / 2 - 2;
+        let footer_width = ((self.width as i16 - pad * 2) / self.renderer.advance.max(1)).max(1);
+        let footer = truncate(&footer, footer_width);
         self.renderer.line(
             &self.c,
             self.gc,
@@ -1467,10 +1504,15 @@ impl Ui {
         };
         let key = self.items[index].key.clone();
         let mut keys = load_runtime_favorites();
+        let mut removed = load_removed_favorites();
         if self.items[index].favorite {
             self.items[index].favorite = false;
             keys.retain(|candidate| candidate != &key);
+            if !removed.iter().any(|candidate| candidate == &key) {
+                removed.push(key);
+            }
             save_runtime_favorites(&keys);
+            save_removed_favorites(&removed);
             self.error.clear();
         } else {
             let count = self.items.iter().filter(|item| item.favorite).count();
@@ -1480,10 +1522,12 @@ impl Ui {
                 return Ok(());
             }
             self.items[index].favorite = true;
+            removed.retain(|candidate| candidate != &key);
             if !keys.iter().any(|candidate| candidate == &key) {
                 keys.push(key);
             }
             save_runtime_favorites(&keys);
+            save_removed_favorites(&removed);
             self.error.clear();
         }
         self.refilter();
@@ -1720,7 +1764,15 @@ impl Ui {
 }
 
 fn truncate(text: &str, max_chars: i16) -> String {
-    text.chars().take(max_chars.max(1) as usize).collect()
+    let max_chars = max_chars.max(1) as usize;
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 1 {
+        return "…".into();
+    }
+    text.chars().take(max_chars - 1).collect::<String>() + "…"
 }
 
 fn spawn_command(
