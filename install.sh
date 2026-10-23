@@ -6,7 +6,7 @@
 #   ./install.sh --uninstall remove the binary and the installed config example
 set -eu
 
-VERSION="0.2.19"
+VERSION="0.2.20"
 REPO="${NIRULAUNCHER_REPO:-nirucon/nirulauncher}"
 PREFIX="${NIRULAUNCHER_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"
@@ -36,6 +36,13 @@ install_config() {
   fi
 }
 
+managed_guard() {
+  [ -L "$BINDIR/nirulauncher" ] || return 0
+  case "$(readlink "$BINDIR/nirulauncher")" in
+    */share/nirux/current/bin/nirulauncher) die 'NIRULAUNCHER is managed by NIRUX; use nirux update.' ;;
+  esac
+}
+managed_guard
 case "${1:-}" in
   --build)
     need cargo || die "cargo is required for --build"
