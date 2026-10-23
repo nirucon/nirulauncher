@@ -563,6 +563,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         "niru-blood-of-urdr",
         "niru-root-and-stone",
         "niru-blue-horizon",
+        "niru-the-norns",
+        "niru-winter-nights",
     ] {
         items.push(Item {
             key: format!("action:theme:{theme}"),
