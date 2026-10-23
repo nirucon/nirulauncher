@@ -554,7 +554,14 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             },
         });
     }
-    for theme in ["niru-noir", "niru-nord", "niru-satie", "niru-carl-larsson"] {
+    for theme in [
+        "niru-noir",
+        "niru-nord",
+        "niru-satie",
+        "niru-carl-larsson",
+        "niru-forest-vigil",
+        "niru-blood-of-urdr",
+    ] {
         items.push(Item {
             key: format!("action:theme:{theme}"),
             group: "Appearance".into(),
