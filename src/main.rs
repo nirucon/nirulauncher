@@ -876,6 +876,18 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         });
     }
     items.push(Item {
+        key: "action:nirux-update".into(),
+        group: "System".into(),
+        name: "Update NIRUX suite…".into(),
+        detail: "Run nirux update in a terminal".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: vec!["nirux".into(), "update".into()],
+            terminal: true,
+            path: None,
+        },
+    });
+    items.push(Item {
         key: "action:reset-bar".into(),
         group: "Appearance".into(),
         name: "Reset bar configuration…".into(),
