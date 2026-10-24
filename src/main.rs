@@ -382,6 +382,42 @@ fn power_items() -> Vec<Item> {
     items
 }
 
+/// Theme slugs NIRUX installs. Kept in step with NIRUWM's theme table; a theme
+/// without `nirux-wallpaper-<slug>-4k.png` shows its background colour instead.
+const THEME_SLUGS: [&str; 10] = [
+    "noir",
+    "nord",
+    "satie",
+    "carl-larsson",
+    "forest-vigil",
+    "blood-of-urdr",
+    "root-and-stone",
+    "blue-horizon",
+    "the-norns",
+    "winter-nights",
+];
+
+/// How many themes have no wallpaper image on disk.
+fn theme_wallpapers_missing(theme_dir: &str) -> usize {
+    let base = if theme_dir.starts_with('/') {
+        std::path::PathBuf::from(theme_dir)
+    } else {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        home.join(theme_dir)
+    };
+    THEME_SLUGS
+        .iter()
+        .filter(|slug| {
+            let stem = format!("nirux-wallpaper-{slug}");
+            !["4k.png", "8k.png", "png"]
+                .iter()
+                .any(|ext| base.join(format!("{stem}-{ext}")).is_file())
+        })
+        .count()
+}
+
 fn spawn_niructl(args: &[&str]) -> Target {
     Target::Spawn {
         argv: std::iter::once("niructl".to_string())
@@ -875,6 +911,39 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         favorite: false,
         target: niructl(&["wallpaper", "mode", next_mode]),
     });
+
+    // The nine non-default theme wallpapers are an optional download from the
+    // project's server, so a release does not carry 300+ MB. Offer the action
+    // here, where every other wallpaper control already lives, and only when
+    // something is actually missing.
+    let theme_dir = wallpaper
+        .get("theme_dir")
+        .map(|d| d.trim_start_matches("~/").to_string())
+        .unwrap_or_else(|| "Pictures/Wallpapers/NIRU".to_string());
+    let missing = theme_wallpapers_missing(&theme_dir);
+    if missing > 0 {
+        items.push(Item {
+            key: "action:wallpaper:download-all".into(),
+            group: "Wallpaper".into(),
+            name: "Wallpaper: download all theme wallpapers".into(),
+            detail: format!("{missing} of 10 themes have no image (~311 MB, 4k and 8k)"),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["nirux".into(), "wallpapers".into(), "download".into()],
+                terminal: true,
+                path: None,
+            },
+        });
+    } else {
+        items.push(Item {
+            key: "action:wallpaper:all-present".into(),
+            group: "Wallpaper".into(),
+            name: "Wallpaper: all ten themes installed".into(),
+            detail: "Remove the downloaded set with: nirux wallpapers remove".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
 
     let rotation = wallpaper
         .get("rotation_minutes")
@@ -2202,5 +2271,46 @@ mod input_tests {
         );
         assert_eq!(apply_caps(0xe5, true), 0xc5, "Caps Lock applies to å");
         assert_eq!(apply_caps(0x40, true), 0x40, "Caps Lock leaves @ alone");
+    }
+}
+
+#[cfg(test)]
+mod wallpaper_tests {
+    use super::{theme_wallpapers_missing, THEME_SLUGS};
+
+    #[test]
+    fn an_empty_theme_directory_has_every_wallpaper_missing() {
+        let dir = std::env::temp_dir().join(format!("nl-wp-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            theme_wallpapers_missing(&dir.to_string_lossy()),
+            THEME_SLUGS.len()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_present_4k_file_counts_as_installed() {
+        let dir = std::env::temp_dir().join(format!("nl-wp-one-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nirux-wallpaper-noir-4k.png"), b"x").unwrap();
+        assert_eq!(
+            theme_wallpapers_missing(&dir.to_string_lossy()),
+            THEME_SLUGS.len() - 1,
+            "noir is installed, so only nine are missing"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_missing_directory_is_not_an_error() {
+        let dir = std::env::temp_dir().join("nl-wp-does-not-exist");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            theme_wallpapers_missing(&dir.to_string_lossy()),
+            THEME_SLUGS.len()
+        );
     }
 }

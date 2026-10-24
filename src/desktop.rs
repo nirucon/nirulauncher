@@ -322,12 +322,20 @@ mod tests {
 
     #[test]
     fn visibility_and_desktop_filters() {
+        // The desktop name is read from the environment, so a developer machine
+        // running Hyprland or GNOME would otherwise decide whether this passes.
+        let previous = std::env::var("XDG_CURRENT_DESKTOP").ok();
+        std::env::set_var("XDG_CURRENT_DESKTOP", "NIRUWM");
         let base = "[Desktop Entry]\nType=Application\nExec=/bin/true\nName=Test\n";
         assert!(app_from_text("a.desktop", base).is_some());
         assert!(app_from_text("a.desktop", &format!("{base}NoDisplay=true\n")).is_none());
         assert!(app_from_text("a.desktop", &format!("{base}Hidden=true\n")).is_none());
         assert!(app_from_text("a.desktop", &format!("{base}OnlyShowIn=GNOME;\n")).is_none());
         assert!(app_from_text("a.desktop", &format!("{base}NotShowIn=NIRUWM;\n")).is_none());
+        match previous {
+            Some(v) => std::env::set_var("XDG_CURRENT_DESKTOP", v),
+            None => std::env::remove_var("XDG_CURRENT_DESKTOP"),
+        }
         assert!(app_from_text(
             "a.desktop",
             &format!("{base}TryExec=/definitely/not/here\n")
