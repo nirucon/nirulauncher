@@ -2314,3 +2314,71 @@ mod wallpaper_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod wallpaper_item_tests {
+    use super::{action_items, theme_wallpapers_missing, Config};
+
+    #[test]
+    fn the_wallpaper_group_offers_the_download_when_themes_are_missing() {
+        // A private config pointing at an empty directory: every theme is
+        // missing, so the download row must be present and run nirux.
+        let dir = std::env::temp_dir().join(format!("nl-items-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("wallpapers")).unwrap();
+        std::fs::write(
+            dir.join("config.toml"),
+            format!(
+                "[wallpaper]\ntheme_dir = \"{}\"\n",
+                dir.join("wallpapers").to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let previous = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+
+        let cfg = Config::load().unwrap();
+        let items = action_items(&cfg);
+        let row = items
+            .iter()
+            .find(|i| i.key == "action:wallpaper:download-all");
+        assert!(
+            row.is_some(),
+            "missing themes must offer a download row; got {:?}",
+            items
+                .iter()
+                .filter(|i| i.group == "Wallpaper")
+                .map(|i| &i.key)
+                .collect::<Vec<_>>()
+        );
+        let row = row.unwrap();
+        assert_eq!(row.group, "Wallpaper");
+        match &row.target {
+            super::Target::Spawn { argv, terminal, .. } => {
+                assert_eq!(argv.first().map(String::as_str), Some("nirux"));
+                assert_eq!(argv.get(1).map(String::as_str), Some("wallpapers"));
+                assert_eq!(argv.get(2).map(String::as_str), Some("download"));
+                assert!(*terminal, "progress must be visible");
+            }
+            _ => panic!("the row must run a command"),
+        }
+
+        match previous {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_missing_theme_counts_once_per_slug() {
+        let dir = std::env::temp_dir().join(format!("nl-count-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for slug in ["noir", "nord"] {
+            std::fs::write(dir.join(format!("nirux-wallpaper-{slug}-4k.png")), b"x").unwrap();
+        }
+        assert_eq!(theme_wallpapers_missing(&dir.to_string_lossy()), 8);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
