@@ -418,6 +418,22 @@ fn theme_wallpapers_missing(theme_dir: &str) -> usize {
         .count()
 }
 
+/// Find an installed program the same way the shell would.
+///
+/// `~/.local/bin` is on the session path, but the launcher may be started
+/// before that is set, so it is checked explicitly.
+fn in_path(name: &str) -> bool {
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".local/share/nirux/current/bin"));
+    }
+    dirs.iter().any(|dir| dir.join(name).is_file())
+}
+
 /// Read the newer NIRUX version the bar cached, if any.
 ///
 /// The bar checks GitHub once a day and writes `~/.cache/nirubar/nirux-update`.
@@ -1064,6 +1080,44 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         favorite: false,
         target: niructl(&["wallpaper", "follow-theme", next_follow]),
     });
+
+    // The graphical settings window covers the same controls with previews.
+    // It is offered only when it is installed, so the launcher does not show a
+    // dead entry on a system that predates it.
+    if in_path("niruwallpaper") {
+        items.push(Item {
+            key: "action:wallpaper:open".into(),
+            group: "Wallpaper".into(),
+            name: "NIRU Wallpaper".into(),
+            detail: "Wallpaper; Background; Appearance; open the settings window".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["niruwallpaper".to_string()],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+
+    // The graphical settings window covers the same controls with previews.
+    // It is offered only when it is installed, so the launcher does not show a
+    // dead entry on a system that predates it. The name carries the words a
+    // user types, because the list shows about a dozen rows and matches the
+    // name before the detail.
+    if in_path("niruwallpaper") {
+        items.push(Item {
+            key: "action:wallpaper:open".into(),
+            group: "Wallpaper".into(),
+            name: "Wallpaper background and appearance: open settings".into(),
+            detail: "NIRU Wallpaper: choose an image and how it is shown".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["niruwallpaper".to_string()],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
 
     for ws in 1..=10 {
         items.push(Item {
@@ -2529,5 +2583,46 @@ mod nirux_update_tests {
     fn a_machine_without_nirux_has_no_action() {
         let _box = Sandbox::new("nosuite");
         assert_eq!(nirux_update_available(), None);
+    }
+}
+
+#[cfg(test)]
+mod wallpaper_search_tests {
+    use super::{action_items, filtered, Config};
+
+    /// The wallpaper settings row must exist and be findable by the words a
+    /// user would try.
+    #[test]
+    fn the_wallpaper_settings_row_is_searchable() {
+        // The row only exists where the program is installed, so the test puts
+        // one on the path instead of depending on the host.
+        let dir = std::env::temp_dir().join(format!("nl-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("niruwallpaper"), "#!/bin/sh\n").unwrap();
+        let previous = std::env::var_os("PATH");
+        let mut dirs = vec![dir.clone()];
+        dirs.extend(std::env::split_paths(&previous.clone().unwrap_or_default()));
+        std::env::set_var("PATH", std::env::join_paths(dirs).unwrap());
+
+        let items = action_items(&Config::default());
+        assert!(
+            items.iter().any(|i| i.key == "action:wallpaper:open"),
+            "the wallpaper settings window must be offered"
+        );
+
+        let usage = std::collections::HashMap::new();
+        for query in ["wallpaper", "background", "appearance"] {
+            let found = filtered(&items, query, &usage)
+                .into_iter()
+                .any(|i| items[i].key == "action:wallpaper:open");
+            assert!(found, "{query:?} does not find the settings window");
+        }
+
+        match previous {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
