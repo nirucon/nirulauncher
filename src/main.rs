@@ -418,6 +418,56 @@ fn theme_wallpapers_missing(theme_dir: &str) -> usize {
         .count()
 }
 
+/// Read the newer NIRUX version the bar cached, if any.
+///
+/// The bar checks GitHub once a day and writes `~/.cache/nirubar/nirux-update`.
+/// Reading that file keeps the launcher and the bar in agreement and avoids a
+/// second network request. Two version strings are compared so a stale cache
+/// from an older install is ignored.
+fn nirux_update_available() -> Option<String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache"))
+        .join("nirubar/nirux-update");
+    let latest = std::fs::read_to_string(cache).ok()?.trim().to_string();
+    let installed = installed_nirux_version()?;
+    is_newer_version(&latest, &installed).then_some(latest)
+}
+
+/// The active generation directory ends in the version.
+fn installed_nirux_version() -> Option<String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let target = std::fs::read_link(home.join(".local/share/nirux/current")).ok()?;
+    let name = target.file_name()?.to_string_lossy().to_string();
+    let version = name.split('-').next()?.to_string();
+    (version.split('.').count() >= 2
+        && version
+            .split('.')
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())))
+    .then_some(version)
+}
+
+/// Compare dotted versions numerically, treating a missing part as zero.
+fn is_newer_version(candidate: &str, installed: &str) -> bool {
+    let parts = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (a, b) = (parts(candidate), parts(installed));
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
 fn spawn_niructl(args: &[&str]) -> Target {
     Target::Spawn {
         argv: std::iter::once("niructl".to_string())
@@ -837,6 +887,23 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                 });
             }
         }
+    }
+    // A newer NIRUX release, read from the same cache the bar uses. The action
+    // runs the update in a terminal: it needs sudo and switches the program
+    // generation, so it must not happen behind the user's back.
+    if let Some(latest) = nirux_update_available() {
+        items.push(Item {
+            key: "action:nirux-update".into(),
+            group: "System".into(),
+            name: format!("Update NIRUX to {latest}"),
+            detail: "Runs in a terminal · log out afterwards".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["nirux".into(), "update".into()],
+                terminal: true,
+                path: None,
+            },
+        });
     }
     items.push(Item {
         key: "action:diagnostics".into(),
@@ -2380,5 +2447,87 @@ mod wallpaper_item_tests {
         }
         assert_eq!(theme_wallpapers_missing(&dir.to_string_lossy()), 8);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod nirux_update_tests {
+    use super::{installed_nirux_version, is_newer_version, nirux_update_available};
+    use std::sync::Mutex;
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    struct Sandbox {
+        dir: std::path::PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Sandbox {
+        fn new(name: &str) -> Self {
+            let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = std::env::temp_dir().join(format!("nl-nux-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("XDG_CACHE_HOME", dir.join(".cache"));
+            Self { dir, _guard: guard }
+        }
+
+        fn install(&self, version: &str) {
+            let gen = self
+                .dir
+                .join(format!(".local/share/nirux/generations/{version}-X"));
+            std::fs::create_dir_all(&gen).unwrap();
+            std::os::unix::fs::symlink(&gen, self.dir.join(".local/share/nirux/current")).unwrap();
+        }
+
+        fn cache(&self, latest: &str) {
+            let cache = self.dir.join(".cache/nirubar");
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(cache.join("nirux-update"), latest).unwrap();
+        }
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    #[test]
+    fn versions_compare_numerically() {
+        assert!(is_newer_version("0.12.2", "0.12.1"));
+        assert!(is_newer_version("0.13.0", "0.12.99"));
+        assert!(!is_newer_version("0.12.1", "0.12.1"));
+        assert!(!is_newer_version("0.9.0", "0.10.0"));
+    }
+
+    #[test]
+    fn the_installed_version_comes_from_the_generation() {
+        let box_ = Sandbox::new("installed");
+        box_.install("0.12.1");
+        assert_eq!(installed_nirux_version().as_deref(), Some("0.12.1"));
+    }
+
+    #[test]
+    fn a_newer_cached_release_offers_the_action() {
+        let box_ = Sandbox::new("newer");
+        box_.install("0.12.1");
+        box_.cache("0.12.2");
+        assert_eq!(nirux_update_available().as_deref(), Some("0.12.2"));
+    }
+
+    #[test]
+    fn an_up_to_date_machine_has_no_action() {
+        let box_ = Sandbox::new("current");
+        box_.install("0.12.2");
+        box_.cache("0.12.2");
+        assert_eq!(nirux_update_available(), None);
+    }
+
+    #[test]
+    fn a_machine_without_nirux_has_no_action() {
+        let _box = Sandbox::new("nosuite");
+        assert_eq!(nirux_update_available(), None);
     }
 }
