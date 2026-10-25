@@ -2,8 +2,8 @@
 
 **Part of [NIRUX - A minimal X11 desktop by Nicklas Rudolfsson](https://github.com/nirucon/nirux).**
 
-**Early beta.** Keyboard-first application, window and desktop-action launcher for the NIRU X11
-desktop. One process per invocation: no daemon, indexing service or network.
+**Early beta.** Keyboard-first application, window and desktop-action launcher
+for the NIRUX X11 desktop. One process per invocation: no daemon, indexing service or network.
 
 
 ## Install
