@@ -37,9 +37,12 @@ nirulauncher --check-config
 Super+P opens application search. Super+Shift+P opens applications, windows and
 grouped actions. `--windows` switches directly to an open window.
 
-`--actions` groups System, Display, Power, Appearance, Workspaces and Windows.
-The Appearance group includes a compositor toggle for picom transparency and
-shadows. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
+`--actions` groups System, Display, Power, Appearance, Wallpaper, Workspaces
+and Windows. The Appearance group includes theme selection and a compositor
+toggle for picom transparency and shadows. The Wallpaper group has one entry
+that opens **NIRU Wallpaper**, where an image, its scale, rotation and the
+screen are chosen with previews; the launcher no longer repeats a list of
+images or single settings. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
 Centered, Centered floating, Floating and Fibonacci, plus previous/next.
 The list is alphabetical, with up to five pinned favourites first. Press
 Ctrl+P on a row to pin or unpin it.

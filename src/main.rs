@@ -382,42 +382,6 @@ fn power_items() -> Vec<Item> {
     items
 }
 
-/// Theme slugs NIRUX installs. Kept in step with NIRUWM's theme table; a theme
-/// without `nirux-wallpaper-<slug>-4k.png` shows its background colour instead.
-const THEME_SLUGS: [&str; 10] = [
-    "noir",
-    "nord",
-    "satie",
-    "carl-larsson",
-    "forest-vigil",
-    "blood-of-urdr",
-    "root-and-stone",
-    "blue-horizon",
-    "the-norns",
-    "winter-nights",
-];
-
-/// How many themes have no wallpaper image on disk.
-fn theme_wallpapers_missing(theme_dir: &str) -> usize {
-    let base = if theme_dir.starts_with('/') {
-        std::path::PathBuf::from(theme_dir)
-    } else {
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        home.join(theme_dir)
-    };
-    THEME_SLUGS
-        .iter()
-        .filter(|slug| {
-            let stem = format!("nirux-wallpaper-{slug}");
-            !["4k.png", "8k.png", "png"]
-                .iter()
-                .any(|ext| base.join(format!("{stem}-{ext}")).is_file())
-        })
-        .count()
-}
-
 /// Find an installed program the same way the shell would.
 ///
 /// `~/.local/bin` is on the session path, but the launcher may be started
@@ -756,32 +720,10 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             target: niructl(&["theme", theme]),
         });
     }
-    // Wallpaper choices and settings come from niructl, so the launcher does
-    // not duplicate the wallpaper parser or write config.toml itself.
-    let wallpaper_list = Command::new("niructl")
-        .args(["wallpaper", "list"])
-        .output()
-        .ok();
-    if let Some(out) = wallpaper_list {
-        if out.status.success() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                let Some((name, path)) = line.split_once('\t') else {
-                    continue;
-                };
-                if name.is_empty() || path.is_empty() {
-                    continue;
-                }
-                items.push(Item {
-                    key: format!("action:wallpaper:{path}"),
-                    group: "Wallpaper".into(),
-                    name: format!("Wallpaper: {name}"),
-                    detail: "Use this image on the desktop".into(),
-                    favorite: false,
-                    target: niructl(&["wallpaper", "set", path]),
-                });
-            }
-        }
-    }
+    // Choosing an image, the scale, rotation and theme following belong to
+    // NIRU Wallpaper, which shows previews and the per-screen choice. The
+    // launcher keeps the one entry that opens it instead of repeating a list
+    // of files here; themes stay in this launcher, under Appearance.
 
     // Audio output/source selection uses niructl -> wpctl. The ID, not the
     // display name, is authoritative because two devices may share a name.
@@ -960,156 +902,17 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         }
     }
 
-    let mut wallpaper = std::collections::HashMap::new();
-    if let Ok(out) = Command::new("niructl")
-        .args(["wallpaper", "status"])
-        .output()
-    {
-        if out.status.success() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some((key, value)) = line.split_once('=') {
-                    wallpaper.insert(key.to_string(), value.to_string());
-                }
-            }
-        }
-    }
-    let mode = wallpaper
-        .get("mode")
-        .map(String::as_str)
-        .unwrap_or("random");
-    let has_file = wallpaper
-        .get("file")
-        .map(|value| !value.is_empty())
-        .unwrap_or(false);
-    let next_mode = match mode {
-        "random" => "fixed",
-        "fixed" if has_file => "single",
-        _ => "random",
-    };
-    items.push(Item {
-        key: "action:wallpaper:mode".into(),
-        group: "Wallpaper".into(),
-        name: format!("Wallpaper mode: {mode}"),
-        detail: format!("Next: {next_mode}"),
-        favorite: false,
-        target: niructl(&["wallpaper", "mode", next_mode]),
-    });
-
-    // The nine non-default theme wallpapers are an optional download from the
-    // project's server, so a release does not carry 300+ MB. Offer the action
-    // here, where every other wallpaper control already lives, and only when
-    // something is actually missing.
-    let theme_dir = wallpaper
-        .get("theme_dir")
-        .map(|d| d.trim_start_matches("~/").to_string())
-        .unwrap_or_else(|| "Pictures/Wallpapers/NIRU".to_string());
-    let missing = theme_wallpapers_missing(&theme_dir);
-    if missing > 0 {
-        items.push(Item {
-            key: "action:wallpaper:download-all".into(),
-            group: "Wallpaper".into(),
-            name: "Wallpaper: download all theme wallpapers".into(),
-            detail: format!("{missing} of 10 themes have no image (~311 MB, 4k and 8k)"),
-            favorite: false,
-            target: Target::Spawn {
-                argv: vec!["nirux".into(), "wallpapers".into(), "download".into()],
-                terminal: true,
-                path: None,
-            },
-        });
-    } else {
-        items.push(Item {
-            key: "action:wallpaper:all-present".into(),
-            group: "Wallpaper".into(),
-            name: "Wallpaper: all ten themes installed".into(),
-            detail: "Remove the downloaded set with: nirux wallpapers remove".into(),
-            favorite: false,
-            target: Target::Info,
-        });
-    }
-
-    let rotation = wallpaper
-        .get("rotation_minutes")
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(10);
-    let next_rotation = match rotation {
-        0 => 5,
-        5 => 10,
-        10 => 30,
-        30 => 60,
-        _ => 0,
-    };
-    items.push(Item {
-        key: "action:wallpaper:rotation".into(),
-        group: "Wallpaper".into(),
-        name: format!("Wallpaper rotation: {rotation} min"),
-        detail: format!("Next: {next_rotation} min"),
-        favorite: false,
-        target: niructl(&["wallpaper", "rotation", &next_rotation.to_string()]),
-    });
-
-    let scale = wallpaper.get("scale").map(String::as_str).unwrap_or("fill");
-    let next_scale = match scale {
-        "fill" => "fit",
-        "fit" => "stretch",
-        "stretch" => "center",
-        _ => "fill",
-    };
-    items.push(Item {
-        key: "action:wallpaper:scale".into(),
-        group: "Wallpaper".into(),
-        name: format!("Wallpaper scale: {scale}"),
-        detail: format!("Next: {next_scale}"),
-        favorite: false,
-        target: niructl(&["wallpaper", "scale", next_scale]),
-    });
-
-    let follow = wallpaper
-        .get("follow_theme")
-        .map(|v| v == "true")
-        .unwrap_or(true);
-    let next_follow = if follow { "off" } else { "on" };
-    items.push(Item {
-        key: "action:wallpaper:follow-theme".into(),
-        group: "Wallpaper".into(),
-        name: format!(
-            "Follow theme wallpaper: {}",
-            if follow { "on" } else { "off" }
-        ),
-        detail: format!("Turn {next_follow}"),
-        favorite: false,
-        target: niructl(&["wallpaper", "follow-theme", next_follow]),
-    });
-
-    // The graphical settings window covers the same controls with previews.
-    // It is offered only when it is installed, so the launcher does not show a
-    // dead entry on a system that predates it.
-    if in_path("niruwallpaper") {
-        items.push(Item {
-            key: "action:wallpaper:open".into(),
-            group: "Wallpaper".into(),
-            name: "NIRU Wallpaper".into(),
-            detail: "Wallpaper; Background; Appearance; open the settings window".into(),
-            favorite: false,
-            target: Target::Spawn {
-                argv: vec!["niruwallpaper".to_string()],
-                terminal: false,
-                path: None,
-            },
-        });
-    }
-
-    // The graphical settings window covers the same controls with previews.
-    // It is offered only when it is installed, so the launcher does not show a
-    // dead entry on a system that predates it. The name carries the words a
-    // user types, because the list shows about a dozen rows and matches the
-    // name before the detail.
+    // One wallpaper entry, offering the window that owns these settings.
+    // It is shown only when it is installed, so a system that predates it
+    // never shows a dead entry. The name carries the words a user types,
+    // because the list shows about a dozen rows and matches the name before
+    // the detail.
     if in_path("niruwallpaper") {
         items.push(Item {
             key: "action:wallpaper:open".into(),
             group: "Wallpaper".into(),
             name: "Wallpaper background and appearance: open settings".into(),
-            detail: "NIRU Wallpaper: choose an image and how it is shown".into(),
+            detail: "NIRU Wallpaper: choose an image, scale, rotation and the screen".into(),
             favorite: false,
             target: Target::Spawn {
                 argv: vec!["niruwallpaper".to_string()],
@@ -2397,110 +2200,105 @@ mod input_tests {
 
 #[cfg(test)]
 mod wallpaper_tests {
-    use super::{theme_wallpapers_missing, THEME_SLUGS};
+    use super::{action_items, filtered, Config};
 
-    #[test]
-    fn an_empty_theme_directory_has_every_wallpaper_missing() {
-        let dir = std::env::temp_dir().join(format!("nl-wp-empty-{}", std::process::id()));
+    fn items_with_wallpaper(installed: bool) -> Vec<super::Item> {
+        let dir = std::env::temp_dir().join(format!("nl-wp-{}-{}", installed, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(
-            theme_wallpapers_missing(&dir.to_string_lossy()),
-            THEME_SLUGS.len()
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_present_4k_file_counts_as_installed() {
-        let dir = std::env::temp_dir().join(format!("nl-wp-one-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("nirux-wallpaper-noir-4k.png"), b"x").unwrap();
-        assert_eq!(
-            theme_wallpapers_missing(&dir.to_string_lossy()),
-            THEME_SLUGS.len() - 1,
-            "noir is installed, so only nine are missing"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_missing_directory_is_not_an_error() {
-        let dir = std::env::temp_dir().join("nl-wp-does-not-exist");
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(
-            theme_wallpapers_missing(&dir.to_string_lossy()),
-            THEME_SLUGS.len()
-        );
-    }
-}
-
-#[cfg(test)]
-mod wallpaper_item_tests {
-    use super::{action_items, theme_wallpapers_missing, Config};
-
-    #[test]
-    fn the_wallpaper_group_offers_the_download_when_themes_are_missing() {
-        // A private config pointing at an empty directory: every theme is
-        // missing, so the download row must be present and run nirux.
-        let dir = std::env::temp_dir().join(format!("nl-items-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("wallpapers")).unwrap();
-        std::fs::write(
-            dir.join("config.toml"),
-            format!(
-                "[wallpaper]\ntheme_dir = \"{}\"\n",
-                dir.join("wallpapers").to_string_lossy()
-            ),
-        )
-        .unwrap();
-        let previous = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::set_var("XDG_CONFIG_HOME", &dir);
-
-        let cfg = Config::load().unwrap();
-        let items = action_items(&cfg);
-        let row = items
-            .iter()
-            .find(|i| i.key == "action:wallpaper:download-all");
-        assert!(
-            row.is_some(),
-            "missing themes must offer a download row; got {:?}",
-            items
-                .iter()
-                .filter(|i| i.group == "Wallpaper")
-                .map(|i| &i.key)
-                .collect::<Vec<_>>()
-        );
-        let row = row.unwrap();
-        assert_eq!(row.group, "Wallpaper");
-        match &row.target {
-            super::Target::Spawn { argv, terminal, .. } => {
-                assert_eq!(argv.first().map(String::as_str), Some("nirux"));
-                assert_eq!(argv.get(1).map(String::as_str), Some("wallpapers"));
-                assert_eq!(argv.get(2).map(String::as_str), Some("download"));
-                assert!(*terminal, "progress must be visible");
-            }
-            _ => panic!("the row must run a command"),
+        if installed {
+            std::fs::write(dir.join("niruwallpaper"), "#!/bin/sh\n").unwrap();
         }
-
+        let previous = std::env::var_os("PATH");
+        let home = std::env::var_os("HOME");
+        let xdg = std::env::var_os("XDG_CONFIG_HOME");
+        // A private configuration keeps the wallpaper status of the host out
+        // of this test; niructl is not installed in the sandbox anyway.
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        std::env::set_var("PATH", &dir);
+        // `in_path` also looks in the home directories, so point HOME at the
+        // same sandbox; otherwise a real installation would hide the result.
+        std::env::set_var("HOME", &dir);
+        let items = action_items(&Config::default());
         match previous {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        match home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match xdg {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
             None => std::env::remove_var("XDG_CONFIG_HOME"),
         }
         std::fs::remove_dir_all(&dir).ok();
+        items
+    }
+
+    /// The environment is process-wide, so these tests run one at a time.
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     #[test]
-    fn a_missing_theme_counts_once_per_slug() {
-        let dir = std::env::temp_dir().join(format!("nl-count-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for slug in ["noir", "nord"] {
-            std::fs::write(dir.join(format!("nirux-wallpaper-{slug}-4k.png")), b"x").unwrap();
+    fn the_wallpaper_group_is_one_settings_entry() {
+        let _guard = lock();
+        let items = items_with_wallpaper(true);
+        let rows: Vec<_> = items.iter().filter(|i| i.group == "Wallpaper").collect();
+        let keys: Vec<&str> = rows.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the settings window belongs here: {keys:?}"
+        );
+        assert_eq!(rows[0].key, "action:wallpaper:open");
+        // The image, scale, rotation and follow controls moved into the window.
+        for key in [
+            "action:wallpaper:mode",
+            "action:wallpaper:rotation",
+            "action:wallpaper:scale",
+            "action:wallpaper:follow-theme",
+            "action:wallpaper:download-all",
+        ] {
+            assert!(
+                !items.iter().any(|i| i.key == key),
+                "{key} should not be a launcher row"
+            );
         }
-        assert_eq!(theme_wallpapers_missing(&dir.to_string_lossy()), 8);
-        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_wallpaper_row_without_the_window() {
+        let _guard = lock();
+        let items = items_with_wallpaper(false);
+        assert!(!items.iter().any(|i| i.group == "Wallpaper"));
+    }
+
+    #[test]
+    fn themes_stay_in_the_launcher() {
+        let _guard = lock();
+        let items = items_with_wallpaper(true);
+        assert!(
+            items.iter().any(|i| i.key.starts_with("action:theme:")),
+            "themes are applied from the launcher"
+        );
+    }
+
+    #[test]
+    fn the_settings_row_is_searchable() {
+        let _guard = lock();
+        let items = items_with_wallpaper(true);
+        let usage = std::collections::HashMap::new();
+        for query in ["wallpaper", "background", "appearance"] {
+            assert!(
+                filtered(&items, query, &usage)
+                    .iter()
+                    .any(|&index| items[index].key == "action:wallpaper:open"),
+                "{query} must find the settings window"
+            );
+        }
     }
 }
 
@@ -2583,47 +2381,6 @@ mod nirux_update_tests {
     fn a_machine_without_nirux_has_no_action() {
         let _box = Sandbox::new("nosuite");
         assert_eq!(nirux_update_available(), None);
-    }
-}
-
-#[cfg(test)]
-mod wallpaper_search_tests {
-    use super::{action_items, filtered, Config};
-
-    /// The wallpaper settings row must exist and be findable by the words a
-    /// user would try.
-    #[test]
-    fn the_wallpaper_settings_row_is_searchable() {
-        // The row only exists where the program is installed, so the test puts
-        // one on the path instead of depending on the host.
-        let dir = std::env::temp_dir().join(format!("nl-search-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("niruwallpaper"), "#!/bin/sh\n").unwrap();
-        let previous = std::env::var_os("PATH");
-        let mut dirs = vec![dir.clone()];
-        dirs.extend(std::env::split_paths(&previous.clone().unwrap_or_default()));
-        std::env::set_var("PATH", std::env::join_paths(dirs).unwrap());
-
-        let items = action_items(&Config::default());
-        assert!(
-            items.iter().any(|i| i.key == "action:wallpaper:open"),
-            "the wallpaper settings window must be offered"
-        );
-
-        let usage = std::collections::HashMap::new();
-        for query in ["wallpaper", "background", "appearance"] {
-            let found = filtered(&items, query, &usage)
-                .into_iter()
-                .any(|i| items[i].key == "action:wallpaper:open");
-            assert!(found, "{query:?} does not find the settings window");
-        }
-
-        match previous {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
