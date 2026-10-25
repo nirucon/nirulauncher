@@ -2626,3 +2626,51 @@ mod wallpaper_search_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod search_tests {
+    use super::{filtered, Item, Target};
+
+    fn row(group: &str, name: &str, detail: &str) -> Item {
+        Item {
+            key: format!("{group}:{name}"),
+            group: group.into(),
+            name: name.into(),
+            detail: detail.into(),
+            favorite: false,
+            target: Target::Info,
+        }
+    }
+
+    /// A row is found by its group name, because the group is part of what the
+    /// list calls it. Several groups rely on this instead of repeating the
+    /// word in every row's name.
+    #[test]
+    fn a_row_is_found_by_its_group_name() {
+        let items = vec![
+            row("Appearance", "Compositor", "Toggle transparency"),
+            row("Files", "Backup", "Copy to a disk"),
+        ];
+        let usage = std::collections::HashMap::new();
+        let hits: Vec<&str> = filtered(&items, "appearance", &usage)
+            .into_iter()
+            .map(|i| items[i].name.as_str())
+            .collect();
+        assert_eq!(hits, ["Compositor"]);
+    }
+
+    /// Within one rank a shorter label is the closer match and sorts first.
+    #[test]
+    fn a_closer_match_sorts_before_a_longer_one() {
+        let items = vec![
+            row("Wallpaper", "Wallpaper wallpaper wallpaper", "x"),
+            row("Wallpaper", "Wallpaper", "y"),
+        ];
+        let usage = std::collections::HashMap::new();
+        let order = filtered(&items, "wallpaper", &usage);
+        assert_eq!(
+            items[order[0]].name, "Wallpaper",
+            "the shorter label is the closer match"
+        );
+    }
+}
