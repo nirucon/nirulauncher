@@ -490,20 +490,12 @@ fn display_items() -> Vec<Item> {
     }
     // The layout as it is now becomes a profile in one step; rotating a single
     // screen is the common fix for a display mounted upside down.
-    for (key, name, detail, command) in [
-        (
-            "display:save",
-            "Displays: Save this layout as a profile",
-            "Then run nirux layout save to choose its name",
-            vec!["display", "save"],
-        ),
-        (
-            "display:auto",
-            "Displays: Arrange side by side",
-            "Preferred mode on every connected screen",
-            vec!["display", "auto"],
-        ),
-    ] {
+    for (key, name, detail, command) in [(
+        "display:auto",
+        "Displays: Arrange side by side",
+        "Preferred mode on every connected screen",
+        vec!["display", "auto"],
+    )] {
         items.push(Item {
             key: key.into(),
             group: "Displays".into(),

@@ -50,7 +50,8 @@ Centered, Centered floating, Floating and Fibonacci, plus previous/next.
 The list is alphabetical, with up to five pinned favourites first. Press
 Ctrl+P on a row to pin or unpin it.
 It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
-actions, display-profile preview/keep/revert, power profiles, diagnostics, work
+actions, display profiles (preview/keep/revert, arrange side by side, and a
+"turn this screen" entry for every rotation), power profiles, diagnostics, work
 modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,
 themes, workspaces and confirmed session actions.
 
