@@ -189,4 +189,43 @@ LAUNCHER=""
 grep -qxF 'https://duckduckgo.com/?q=metal+archives' "$ARGS_FILE" || {
   echo "FAIL wrong typed address: $(cat "$ARGS_FILE")"; exit 1
 }
+# Naming a layout profile happens in the launcher itself: the row opens a
+# prompt, and Enter saves the profile with the typed name.
+cat > "$T/bin/niructl" <<'SAVE'
+#!/bin/sh
+case "$*" in
+  'display list') exit 0 ;;
+  'display save'*) printf '%s
+' "$*" >> "$ARGS_FILE" ;;
+esac
+SAVE
+chmod +x "$T/bin/niructl"
+rm -f "$ARGS_FILE"
+"$BIN" --displays >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo 'FAIL displays view'; exit 1; }
+  sleep 0.05
+done
+xdotool type --delay 20 'save this layout'
+xdotool key Return
+sleep 0.3
+xdotool type --delay 20 'Desk 2'
+xdotool key Return
+i=0
+while [ ! -s "$ARGS_FILE" ]; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL layout profile was not saved'; exit 1; }
+  sleep 0.05
+done
+grep -qxF 'display save Desk 2' "$ARGS_FILE" || {
+  echo "FAIL wrong save call: $(cat "$ARGS_FILE")"; exit 1
+}
+xdotool key Escape
+i=0
+while kill -0 "$LAUNCHER" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL Escape after saving'; exit 1; }
+  sleep 0.05
+done
+LAUNCHER=""
 echo "PASS ui-smoke"

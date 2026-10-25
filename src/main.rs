@@ -98,6 +98,8 @@ struct Ui {
     sources: Vec<websearch::Source>,
     /// How many items existed before the first web-search row was added.
     plain_items: usize,
+    /// The profile name while a layout is being saved, with the cursor.
+    profile_name: Option<String>,
 }
 
 /// Shorter text filters apps; from here on it also searches the web.
@@ -497,6 +499,15 @@ fn display_items() -> Vec<Item> {
         detail: "Preferred mode on every connected screen".into(),
         favorite: false,
         target: spawn_niructl(&["display", "auto"]),
+    });
+    // Naming the layout happens here, so saving needs no terminal.
+    items.push(Item {
+        key: "display:save".into(),
+        group: "Displays".into(),
+        name: "Displays: Save this layout as a profile".into(),
+        detail: "Type a name, then Enter".into(),
+        favorite: false,
+        target: Target::Info,
     });
     if let Ok(output) = Command::new("niructl").args(["monitors"]).output() {
         if output.status.success() {
@@ -1474,6 +1485,7 @@ impl Ui {
             cfg,
             renderer,
             plain_items: items.len(),
+            profile_name: None,
             items,
             filtered,
             usage,
@@ -1513,7 +1525,10 @@ impl Ui {
             },
             pal.surface,
         )?;
-        let title = if self.confirm.is_some() {
+        let title = if let Some(name) = &self.profile_name {
+            let _ = name;
+            "Name the layout profile"
+        } else if self.confirm.is_some() {
             "Confirm"
         } else if self.web_mode {
             "Search the web"
@@ -1528,7 +1543,9 @@ impl Ui {
         } else {
             "Search applications"
         };
-        let query = if self.query.is_empty() {
+        let query = if let Some(name) = &self.profile_name {
+            format!("{title}: {name}")
+        } else if self.query.is_empty() {
             title.to_string()
         } else {
             format!("{title}: {}", self.query)
@@ -1615,6 +1632,8 @@ impl Ui {
                     Action::ResetBar => "reset the bar configuration",
                 }
             )
+        } else if self.profile_name.is_some() {
+            "Enter saves the layout · Esc cancels".to_string()
         } else if !self.error.is_empty() {
             self.error.clone()
         } else {
@@ -1682,6 +1701,57 @@ impl Ui {
         Ok(())
     }
 
+    /// Keys while a layout profile is being named.
+    fn name_key(&mut self, key: u32) -> Result<()> {
+        let Some(mut name) = self.profile_name.take() else {
+            return Ok(());
+        };
+        match key {
+            0xff1b => {
+                self.error.clear();
+            }
+            0xff0d | 0xff8d => {
+                let trimmed = name.trim().to_string();
+                if trimmed.is_empty() {
+                    self.error = "A profile needs a name".into();
+                    self.profile_name = Some(name);
+                } else {
+                    match Command::new("niructl")
+                        .args(["display", "save", &trimmed])
+                        .output()
+                    {
+                        Ok(out) if out.status.success() => {
+                            self.error = format!("Saved the layout as {trimmed}");
+                        }
+                        Ok(out) => {
+                            let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                            self.error = if text.is_empty() {
+                                format!("Could not save the layout as {trimmed}")
+                            } else {
+                                text
+                            };
+                        }
+                        Err(e) => self.error = format!("could not start niructl: {e}"),
+                    }
+                }
+            }
+            0xff08 => {
+                name.pop();
+                self.profile_name = Some(name);
+            }
+            _ if is_text_key(key) => {
+                if let Some(ch) = char::from_u32(key) {
+                    if !ch.is_control() && (!ch.is_whitespace() || !name.ends_with(' ')) {
+                        name.push(ch);
+                    }
+                }
+                self.profile_name = Some(name);
+            }
+            _ => self.profile_name = Some(name),
+        }
+        self.draw()
+    }
+
     fn refilter(&mut self) {
         // Drop the rows the previous keystroke built for the web search. They
         // live after every real item, so removing the tail leaves app, action
@@ -1730,7 +1800,14 @@ impl Ui {
         self.confirm = None;
     }
 
+    /// A link, opened with the same code path as every other spawn.
     fn execute(&mut self, key: &str, target: Target) -> Result<bool> {
+        if key == "display:save" {
+            self.profile_name = Some(String::new());
+            self.error.clear();
+            self.draw()?;
+            return Ok(true);
+        }
         match target {
             Target::Confirm(action) => {
                 if self.confirm.is_some() {
@@ -1827,6 +1904,15 @@ impl Ui {
             match event {
                 Event::KeyPress(e) => {
                     let (key, shift) = key_text(&self.c, e.detail, e.state);
+                    // While a layout profile is being named, the keys belong
+                    // to the name and nothing else.
+                    if self.profile_name.is_some() {
+                        self.name_key(key)?;
+                        continue;
+                    }
+                    // A notice from the last action lasts until the next key,
+                    // so the footer returns to the normal hint by itself.
+                    self.error.clear();
                     if e.state.contains(KeyButMask::CONTROL) && key == 0x70 {
                         self.toggle_favorite()?;
                         continue;
