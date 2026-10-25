@@ -488,23 +488,16 @@ fn display_items() -> Vec<Item> {
             }
         }
     }
-    // The layout as it is now becomes a profile in one step; rotating a single
-    // screen is the common fix for a display mounted upside down.
-    for (key, name, detail, command) in [(
-        "display:auto",
-        "Displays: Arrange side by side",
-        "Preferred mode on every connected screen",
-        vec!["display", "auto"],
-    )] {
-        items.push(Item {
-            key: key.into(),
-            group: "Displays".into(),
-            name: name.into(),
-            detail: detail.into(),
-            favorite: false,
-            target: spawn_niructl(&command),
-        });
-    }
+    // Arranging the screens needs no choice, so it is one row. Rotating a
+    // single screen below is the common fix for a display mounted upside down.
+    items.push(Item {
+        key: "display:auto".into(),
+        group: "Displays".into(),
+        name: "Displays: Arrange side by side".into(),
+        detail: "Preferred mode on every connected screen".into(),
+        favorite: false,
+        target: spawn_niructl(&["display", "auto"]),
+    });
     if let Ok(output) = Command::new("niructl").args(["monitors"]).output() {
         if output.status.success() {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
