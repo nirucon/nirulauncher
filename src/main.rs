@@ -7,6 +7,7 @@
 mod config;
 mod desktop;
 mod render;
+mod websearch;
 
 use config::Config;
 use render::Renderer;
@@ -91,7 +92,16 @@ struct Ui {
     error: String,
     selection: Atom,
     activate: Atom,
+    /// True when the window was opened for a web search (`--search`).
+    web_mode: bool,
+    /// The engines offered for the typed text.
+    sources: Vec<websearch::Source>,
+    /// How many items existed before the first web-search row was added.
+    plain_items: usize,
 }
+
+/// Shorter text filters apps; from here on it also searches the web.
+const MIN_SEARCH_CHARS: usize = 3;
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
     Ok(c.intern_atom(false, name.as_bytes())?.reply()?.atom)
@@ -475,6 +485,54 @@ fn display_items() -> Vec<Item> {
                     favorite: false,
                     target: spawn_niructl(&["display", "preview", fields[0]]),
                 });
+            }
+        }
+    }
+    // The layout as it is now becomes a profile in one step; rotating a single
+    // screen is the common fix for a display mounted upside down.
+    for (key, name, detail, command) in [
+        (
+            "display:save",
+            "Displays: Save this layout as a profile",
+            "Then run nirux layout save to choose its name",
+            vec!["display", "save"],
+        ),
+        (
+            "display:auto",
+            "Displays: Arrange side by side",
+            "Preferred mode on every connected screen",
+            vec!["display", "auto"],
+        ),
+    ] {
+        items.push(Item {
+            key: key.into(),
+            group: "Displays".into(),
+            name: name.into(),
+            detail: detail.into(),
+            favorite: false,
+            target: spawn_niructl(&command),
+        });
+    }
+    if let Ok(output) = Command::new("niructl").args(["monitors"]).output() {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                // `  DisplayPort-5 2560x1440+2560+0` is one screen; the
+                // trailing note lines never start with an indented output name.
+                if fields.len() != 2 || !fields[1].contains('x') || !fields[1].contains('+') {
+                    continue;
+                }
+                let output_name = fields[0];
+                for rotation in ["normal", "left", "right", "inverted"] {
+                    items.push(Item {
+                        key: format!("display:rotate:{output_name}:{rotation}"),
+                        group: "Displays".into(),
+                        name: format!("Displays: Turn {output_name} {rotation}"),
+                        detail: format!("{} · keeps every other screen", fields[1]),
+                        favorite: false,
+                        target: spawn_niructl(&["display", "rotate", output_name, rotation]),
+                    });
+                }
             }
         }
     }
@@ -1268,6 +1326,9 @@ impl Ui {
             items.extend(power_items());
         } else if mode == "windows" {
             items.extend(window_items(&c, root));
+        } else if mode == "search" {
+            // The address bar: typing opens the text in a search engine.
+            items.extend(app_items(apps));
         } else {
             items.extend(app_items(apps));
         }
@@ -1297,7 +1358,13 @@ impl Ui {
         }
         let (px, py) = point(&c, root);
         let monitor = monitor_at(&c, root, px, py);
-        let rows = items.len().min(cfg.max_rows).max(1);
+        // The web-search row is added when text is typed, so the window is
+        // opened tall enough for it from the start instead of resizing later.
+        let web_mode = mode == "search";
+        let sources = websearch::sources(&cfg.search_sources);
+        // One row per engine plus the local matches the window already has.
+        let search_slot = if web_mode { sources.len() } else { 0 };
+        let rows = (items.len() + search_slot).min(cfg.max_rows).max(1);
         let (_, line_height) = Renderer::measure(cfg.font_path.as_deref(), cfg.font_size)?;
         let row_height = cfg.row_height.max(line_height + 8);
         let padding = cfg.padding.max((line_height / 2).max(8));
@@ -1421,6 +1488,7 @@ impl Ui {
             gc,
             cfg,
             renderer,
+            plain_items: items.len(),
             items,
             filtered,
             usage,
@@ -1436,6 +1504,8 @@ impl Ui {
             error: String::new(),
             selection,
             activate,
+            web_mode,
+            sources,
         };
         ui.draw()?;
         Ok(ui)
@@ -1460,6 +1530,8 @@ impl Ui {
         )?;
         let title = if self.confirm.is_some() {
             "Confirm"
+        } else if self.web_mode {
+            "Search the web"
         } else if self.items.iter().all(|item| item.group == "Audio") {
             "Microphone controls"
         } else if self
@@ -1626,11 +1698,36 @@ impl Ui {
     }
 
     fn refilter(&mut self) {
+        // Drop the rows the previous keystroke built for the web search. They
+        // live after every real item, so removing the tail leaves app, action
+        // and favourite indices unchanged.
+        self.items.truncate(self.plain_items);
         self.filtered = filtered(&self.items, &self.query, &self.usage);
+        self.error.clear();
+        // A web search belongs to a phrase, not to a short filter. From three
+        // characters on the engine rows join the list at the top, so Enter
+        // opens the first engine and the local matches stay one Tab away.
+        if self.web_mode && self.query.trim().chars().count() >= MIN_SEARCH_CHARS {
+            let mut rows = Vec::new();
+            for source in &self.sources {
+                if let Some(item) = websearch::item(source, &self.query) {
+                    rows.push(item);
+                }
+            }
+            if rows.is_empty() {
+                self.error = "No search engine is configured; see the launcher README".into();
+            } else {
+                let start = self.items.len();
+                self.items.extend(rows);
+                self.filtered.splice(0..0, start..self.items.len());
+                self.error = "Enter opens the selected engine · Tab moves · Esc closes".to_string();
+            }
+        } else if self.web_mode && !self.query.trim().is_empty() {
+            self.error = format!("Type at least {MIN_SEARCH_CHARS} characters to search the web");
+        }
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
         self.confirm = None;
-        self.error.clear();
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -1994,6 +2091,39 @@ fn main() {
             }
             Err(e) => Err(e),
         },
+        "--search" | "--search=" => {
+            // `--search PHRASE` opens the address bar with the text already in
+            // it, which is the useful thing for a keyboard shortcut that
+            // passes the selection. With no phrase it starts empty.
+            let phrase = args
+                .get(1)
+                .cloned()
+                .or_else(|| arg.strip_prefix("--search=").map(str::to_string))
+                .unwrap_or_default();
+            match Ui::new("search") {
+                Ok(mut ui) => {
+                    ui.query = phrase;
+                    ui.refilter();
+                    ui.run()
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "--list-search" => match Config::load() {
+            Ok(cfg) => {
+                for source in websearch::sources(&cfg.search_sources) {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        source.label,
+                        source.id,
+                        source.url,
+                        source.host()
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => Err(e),
+        },
         "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays"
         | "--power" => {
             let mode = match arg {
@@ -2012,13 +2142,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
@@ -2429,5 +2559,52 @@ mod search_tests {
             items[order[0]].name, "Wallpaper",
             "the shorter label is the closer match"
         );
+    }
+
+    /// Typing a phrase in `--search` puts the engine rows above the local
+    /// matches, and the first one is a complete, ready-to-open address.
+    #[test]
+    fn a_phrase_offers_every_engine_at_the_top() {
+        // A local match that contains the phrase, so ranking and the engine
+        // rows are compared together.
+        let mut plain = vec![row("App", "black metal 1994 playlist", "music")];
+        let before = plain.len();
+        let sources = super::websearch::sources(&[]);
+        let phrase = "black metal 1994";
+        for source in &sources {
+            plain.push(super::websearch::item(source, phrase).expect("a row per engine"));
+        }
+        let usage = std::collections::HashMap::new();
+        let order = filtered(&plain, phrase, &usage);
+        // In the running launcher the engine rows are placed above the local
+        // hits whatever their rank; `filtered` sorts the local ones only.
+        let first_engine = &plain[order[0]];
+        assert_eq!(first_engine.name, "black metal 1994 playlist");
+        let first_engine = &plain[before];
+        assert_eq!(first_engine.name, "DuckDuckGo: black metal 1994");
+        match &first_engine.target {
+            Target::Spawn { argv, .. } => {
+                assert!(argv.last().unwrap().contains("black+metal+1994"));
+            }
+            _ => panic!("a search row must open a program"),
+        }
+        // Every engine got a row, and none of them hides a local match.
+        let engine_rows = plain[before..]
+            .iter()
+            .filter(|item| item.group == "Search")
+            .count();
+        assert_eq!(engine_rows, sources.len());
+    }
+
+    /// Three letters is the point where a filter becomes a search.
+    #[test]
+    fn short_text_is_not_a_web_search() {
+        assert_eq!(super::MIN_SEARCH_CHARS, 3);
+        let sources = super::websearch::sources(&[]);
+        let short = "ab";
+        assert!(sources
+            .iter()
+            .filter_map(|source| super::websearch::item(source, short))
+            .all(|item| item.name.ends_with("ab")));
     }
 }

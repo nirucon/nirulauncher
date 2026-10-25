@@ -25,6 +25,9 @@ Requires an X11 session and a monospaced font through fontconfig or
 
 ```sh
 nirulauncher --apps
+nirulauncher --search             # type a phrase, Enter opens a search engine
+nirulauncher --search PHRASE      # the phrase is already in the field
+nirulauncher --list-search        # the engines and their addresses
 nirulauncher --actions
 nirulauncher --windows
 nirulauncher --microphone
@@ -51,6 +54,49 @@ actions, display-profile preview/keep/revert, power profiles, diagnostics, work
 modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,
 themes, workspaces and confirmed session actions.
 
+### Web search
+
+`--search` turns the launcher into an address bar. From three characters on,
+every configured search engine appears as its own row at the top of the list,
+one per line with the address it opens; the local application matches stay
+below them, so the launcher is still a launcher. Enter opens the selected
+engine, Tab or the arrow keys move between engines, and Escape closes.
+
+Ten engines are built in, ready to use:
+
+| id | Engine |
+|---|---|
+| `duckduckgo` | DuckDuckGo |
+| `brave` | Brave Search |
+| `google` | Google |
+| `wikipedia` | Wikipedia (English) |
+| `youtube` | YouTube |
+| `chatgpt` | ChatGPT |
+| `gemini` | Gemini |
+| `grok` | Grok |
+| `copilot` | Microsoft Copilot |
+| `metal-archives` | Metal Archives |
+
+Adding one is a few lines in `~/.config/nirulauncher/config.toml`; no rebuild
+and no new mode:
+
+```toml
+[[search.sources]]
+id = "searx"
+label = "SearXNG (home)"
+url = "https://searx.example/search?q={query}"
+```
+
+`{query}` is replaced by the percent-encoded phrase. An id that matches a
+built-in replaces it in place (so the familiar engines keep their order); a new
+id is appended after them. `enabled = false` turns an engine off. Only `http`
+and `https` addresses are opened, so a mistyped template cannot start a local
+program.
+
+The launcher never contacts the network: it hands the address to the browser
+named by `browser` in the launcher config, else NIRUWM's `browser`, else
+`$BROWSER`, else the desktop default through `xdg-open`.
+
 Desktop `Exec` lines are parsed into argv and never passed through a shell.
 Applications with `Terminal=true` use the configured terminal argv. Favourites
 are configured in `~/.config/nirulauncher/config.toml`; launch recency is stored
@@ -69,7 +115,7 @@ keysym text. Shift, Caps Lock and AltGr are handled, including Swedish letters.
 ```sh
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test
+cargo test -- --test-threads=1
 sh tests/ui-smoke.sh
 ```
 

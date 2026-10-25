@@ -10,7 +10,8 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
+      # The environment tests share HOME and PATH; one thread is deterministic.
+      - run: cargo test --locked -- --test-threads=1
       - name: Native X11 smoke test
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb xauth xdotool x11-apps x11-utils imagemagick

@@ -135,4 +135,58 @@ done
 grep -qxF 'audio source 67' "$ARGS_FILE"
 wait "$LAUNCHER"
 LAUNCHER=""
+
+# Web search: a phrase opens the configured browser with the engine's own
+# address, and Tab moves to the next engine before Enter is pressed.
+cat > "$T/bin/fakebrowser" <<'BROWSER'
+#!/bin/sh
+printf '%s\n' "$@" >> "$ARGS_FILE"
+BROWSER
+chmod +x "$T/bin/fakebrowser"
+mkdir -p "$XDG_CONFIG_HOME/nirulauncher"
+printf 'browser = ["%s"]\n' "$T/bin/fakebrowser" > "$XDG_CONFIG_HOME/nirulauncher/config.toml"
+rm -f "$ARGS_FILE"
+"$BIN" --search 'black metal' >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo 'FAIL search view'; exit 1; }
+  sleep 0.05
+done
+# The phrase arrives on the command line; one Tab picks the second engine.
+xdotool key Tab
+xdotool key Return
+i=0
+while [ ! -s "$ARGS_FILE" ]; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL search did not open a browser'; exit 1; }
+  sleep 0.05
+done
+wait "$LAUNCHER"
+LAUNCHER=""
+grep -qxF 'https://search.brave.com/search?q=black+metal' "$ARGS_FILE" || {
+  echo "FAIL wrong search address: $(cat "$ARGS_FILE")"; exit 1
+}
+
+# Typing the phrase instead of passing it gives the same result.
+rm -f "$ARGS_FILE"
+"$BIN" --search >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo 'FAIL empty search view'; exit 1; }
+  sleep 0.05
+done
+xdotool type --delay 40 'metal archives'
+sleep 1
+xdotool key Return
+i=0
+while [ ! -s "$ARGS_FILE" ]; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL typed search did not open a browser'; exit 1; }
+  sleep 0.05
+done
+wait "$LAUNCHER"
+LAUNCHER=""
+grep -qxF 'https://duckduckgo.com/?q=metal+archives' "$ARGS_FILE" || {
+  echo "FAIL wrong typed address: $(cat "$ARGS_FILE")"; exit 1
+}
 echo "PASS ui-smoke"

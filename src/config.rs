@@ -13,8 +13,12 @@ pub struct Config {
     pub font_path: Option<String>,
     pub font_size: f32,
     pub terminal: Vec<String>,
+    /// How a web search is opened: the program, then the address.
+    pub browser: Vec<String>,
     /// Desktop-file IDs or action names pinned above search rank.
     pub favorites: Vec<String>,
+    /// Engines added to, or turned off from, the built-in search list.
+    pub search_sources: Vec<crate::websearch::ConfigSource>,
     pub palette: Palette,
 }
 
@@ -61,10 +65,47 @@ impl Default for Config {
             font_path: None,
             font_size: 15.0,
             terminal: vec!["kitty".into()],
+            browser: Vec::new(),
             favorites: Vec::new(),
+            search_sources: Vec::new(),
             palette: Palette::default(),
         }
     }
+}
+
+/// `[[search.sources]]` entries, each `id`, optional `label`, `url`, `enabled`.
+fn search_sources_from(v: &toml::Value) -> Vec<crate::websearch::ConfigSource> {
+    v.get("search")
+        .and_then(|search| search.get("sources"))
+        .and_then(|sources| sources.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let id = entry.get("id")?.as_str()?.trim().to_string();
+                    if id.is_empty() {
+                        return None;
+                    }
+                    Some(crate::websearch::ConfigSource {
+                        id,
+                        label: entry
+                            .get("label")
+                            .and_then(|label| label.as_str())
+                            .map(str::to_string),
+                        url: entry
+                            .get("url")
+                            .and_then(|url| url.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        enabled: entry
+                            .get("enabled")
+                            .and_then(|enabled| enabled.as_bool())
+                            .unwrap_or(true),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn config_home() -> PathBuf {
@@ -328,9 +369,13 @@ impl Config {
                 cfg.terminal = t;
             }
         }
+        if let Some(b) = array(v, "browser") {
+            cfg.browser = b;
+        }
         if let Some(f) = array(v, "favorites") {
             cfg.favorites = f;
         }
+        cfg.search_sources = search_sources_from(v);
         cfg.palette = suite_palette_from(&config_home());
         if let Some(appearance) = appearance_value(&config_home()) {
             if v.get("font_size").is_none() {
@@ -356,6 +401,21 @@ impl Config {
     }
 
     pub fn describe(&self) -> String {
+        let custom = if self.search_sources.is_empty() {
+            "built-in".to_string()
+        } else {
+            self.search_sources
+                .iter()
+                .map(|source| {
+                    if source.enabled {
+                        source.id.clone()
+                    } else {
+                        format!("-{}", source.id)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         format!(
             "config: {}\nwidth: {}\nmax rows: {}\nrow height: {}\nfont: {} {}\nterminal: {}\nfavorites: {}",
             path().display(),
@@ -366,6 +426,14 @@ impl Config {
             self.font_path.as_deref().unwrap_or("auto"),
             self.terminal.join(" "),
             self.favorites.join(", ")
+        ) + &format!(
+            "\nbrowser: {}\nsearch: {}",
+            if self.browser.is_empty() {
+                "suite default".to_string()
+            } else {
+                self.browser.join(" ")
+            },
+            custom
         )
     }
 }

@@ -19,5 +19,37 @@ font_size = 15.0
 # Applications with Terminal=true are started through this argv array.
 terminal = ["kitty"]
 
+# How a web search opens: the program, then the address.
+# Leave empty to use NIRUWM's `browser` from ~/.config/niruwm/config.toml,
+# then $BROWSER, then xdg-open (the desktop's default browser).
+# browser = ["brave"]
+
+# Web search engines. Ten are built in and need no configuration:
+# duckduckgo, brave, google, wikipedia, youtube, chatgpt, gemini, grok,
+# copilot, metal-archives. `nirulauncher --list-search` prints their ids,
+# labels, templates and hosts.
+#
+# Add or override an engine with a `[[search.sources]]` entry. An id that
+# matches a built-in replaces it in place; a new id is appended. `{query}` is
+# replaced by the percent-encoded text (`{}` works too; a template with
+# neither gets `?q=` appended). Only http(s) addresses are opened, so a typo
+# cannot start a local program.
+#
+# [[search.sources]]
+# id = "searx"
+# label = "SearXNG (home)"
+# url = "https://searx.example/search?q={query}"
+#
+# [[search.sources]]
+# id = "google"
+# label = "Google (no tracking)"
+# url = "https://www.google.com/search?q={query}&pws=0"
+#
+# To leave an engine out, turn it off by id:
+#
+# [[search.sources]]
+# id = "grok"
+# enabled = false
+
 # Desktop-file IDs or action names pinned above search rank.
 # favorites = ["firefox.desktop", "Lock screen"]
