@@ -422,9 +422,14 @@ fn nirux_update_available() -> Option<String> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| home.join(".cache"))
         .join("nirubar/nirux-update");
-    let latest = std::fs::read_to_string(cache).ok()?.trim().to_string();
+    let latest = std::fs::read_to_string(&cache).ok()?.trim().to_string();
     let installed = installed_nirux_version()?;
-    is_newer_version(&latest, &installed).then_some(latest)
+    is_newer_version(&latest, &installed).then(|| {
+        // The answer is worth showing once. Keeping it would offer the same
+        // update after it has been installed, until the bar checks again.
+        let _ = std::fs::remove_file(&cache);
+        latest
+    })
 }
 
 /// The active generation directory ends in the version.

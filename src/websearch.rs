@@ -53,7 +53,7 @@ pub const BUILTIN: &[(&str, &str, &str)] = &[
     (
         "copilot",
         "Microsoft Copilot",
-        "https://copilot.microsoft.com/?q={query}",
+        "https://copilot.microsoft.com/?q={query}&sendquery=1",
     ),
     (
         "metal-archives",
@@ -227,7 +227,11 @@ pub fn item(source: &Source, query: &str) -> Option<crate::Item> {
     let url = source.url_for(query)?;
     let text = query.trim().to_string();
     Some(crate::Item {
-        key: format!("search:{}:{}", source.id, text),
+        // The key names the engine only. It is what favourites and the usage
+        // file store, and both are plain text on disk: the words a person
+        // searches with must not be written there. Ranking by engine still
+        // works, because that is a preference anyway.
+        key: format!("search:{}", source.id),
         group: "Search".into(),
         name: format!("{}: {text}", source.label),
         detail: source.host(),
@@ -315,6 +319,32 @@ mod tests {
             Some("https://duckduckgo.com/?q=black+metal+1994")
         );
         assert_eq!(source.host(), "duckduckgo.com");
+    }
+
+    /// Every default engine must carry the words somewhere, or the row would
+    /// open a page that ignores what was typed.
+    #[test]
+    fn every_builtin_engine_carries_the_query() {
+        for source in sources(&[]) {
+            let url = source.url_for("test").expect("a built-in engine opens");
+            assert!(url.contains("test"), "{} drops the query: {url}", source.id);
+            assert!(url.starts_with("https://"), "{}: {url}", source.id);
+        }
+    }
+
+    /// The key is written to the usage and favourites files in plain text, so
+    /// it may not contain what the user searched for.
+    #[test]
+    fn the_row_key_does_not_contain_the_query() {
+        for source in sources(&[]) {
+            let item = item(&source, "my private phrase").expect("a row per engine");
+            assert_eq!(item.key, format!("search:{}", source.id));
+            assert!(
+                !item.key.contains("private"),
+                "the query leaked into a stored key: {}",
+                item.key
+            );
+        }
     }
 
     #[test]
