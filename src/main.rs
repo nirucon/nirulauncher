@@ -1527,6 +1527,30 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         });
     }
 
+    // The wallpaper window owns viewing and applying; NIRUX owns the verified
+    // 255 MB download, so this row opens the installer in a terminal instead of
+    // teaching the GUI a second download implementation.
+    if in_path("nirux") {
+        items.push(Item {
+            key: "action:wallpaper:download-extras".into(),
+            group: "Wallpaper".into(),
+            name: "Download additional theme wallpapers…".into(),
+            detail: "Carl Larsson and Erik Satie: red, blue, green and noir in 4K/8K".into(),
+            keywords: "extra colour color wallpaper satie carl larsson red blue green noir".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec![
+                    "nirux".to_string(),
+                    "wallpapers".to_string(),
+                    "download".to_string(),
+                    "extras".to_string(),
+                ],
+                terminal: true,
+                path: None,
+            },
+        });
+    }
+
     for ws in 1..=10 {
         items.push(Item {
             key: format!("action:workspace:{ws}"),
@@ -3681,6 +3705,35 @@ mod wallpaper_tests {
         items
     }
 
+    fn items_with_wallpaper_and_nirux() -> Vec<super::Item> {
+        let dir = std::env::temp_dir().join(format!("nl-wp-nirux-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("niruwallpaper"), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.join("nirux"), "#!/bin/sh\n").unwrap();
+        let previous = std::env::var_os("PATH");
+        let home = std::env::var_os("HOME");
+        let xdg = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("HOME", &dir);
+        let items = action_items(&Config::default());
+        match previous {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        match home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match xdg {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        items
+    }
+
     /// The environment is process-wide, so these tests run one at a time.
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3712,6 +3765,22 @@ mod wallpaper_tests {
                 "{key} should not be a launcher row"
             );
         }
+    }
+
+    #[test]
+    fn the_extra_wallpaper_download_is_a_separate_row_when_nirux_exists() {
+        let _guard = lock();
+        let items = items_with_wallpaper_and_nirux();
+        let rows: Vec<_> = items.iter().filter(|i| i.group == "Wallpaper").collect();
+        let keys: Vec<&str> = rows.iter().map(|i| i.key.as_str()).collect();
+        assert!(keys.contains(&"action:wallpaper:open"));
+        assert!(keys.contains(&"action:wallpaper:download-extras"));
+        let extra = rows
+            .iter()
+            .find(|i| i.key == "action:wallpaper:download-extras")
+            .unwrap();
+        assert!(extra.name.contains("additional"));
+        assert_eq!(extra.target_kind(), "spawn");
     }
 
     #[test]

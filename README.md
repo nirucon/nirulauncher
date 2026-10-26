@@ -48,10 +48,11 @@ directly to an open window.
 
 `--actions` groups System, Display, Power, Appearance, Wallpaper, Wi-Fi,
 Workspaces, Windows and NIRUX Settings. The Appearance group includes theme selection and a
-compositor toggle for picom transparency and shadows. The Wallpaper group has
-one entry that opens **NIRU Wallpaper**, where an image, its scale, rotation and
-the screen are chosen with previews; the launcher no longer repeats a list of
-images or single settings. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
+compositor toggle for picom transparency and shadows. The Wallpaper group opens
+**NIRU Wallpaper**, where an image, its scale, rotation and the screen are
+chosen with previews. When NIRUX is installed, a second row downloads the
+optional Carl Larsson and Erik Satie colour packs in a terminal; the launcher
+does not duplicate the image browser or apply wallpaper itself. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
 Centered, Centered floating, Floating and Fibonacci, plus previous/next.
 The list is alphabetical, with up to five pinned favourites first. Press
 Ctrl+P on a row to pin or unpin it. Theme mode starts with **Open theme
