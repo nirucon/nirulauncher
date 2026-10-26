@@ -32,6 +32,7 @@ nirulauncher --actions
 nirulauncher --windows
 nirulauncher --microphone
 nirulauncher --bluetooth
+nirulauncher --wifi               # Wi-Fi networks, saved profiles and radio
 nirulauncher --displays
 nirulauncher --power
 nirulauncher --keys               # active keybindings, including overrides
@@ -45,8 +46,8 @@ Super+P opens application search. Super+Shift+P opens applications, windows and
 grouped actions. Super+S opens the dedicated web search. `--windows` switches
 directly to an open window.
 
-`--actions` groups System, Display, Power, Appearance, Wallpaper, Workspaces,
-Windows and NIRUX Settings. The Appearance group includes theme selection and a
+`--actions` groups System, Display, Power, Appearance, Wallpaper, Wi-Fi,
+Workspaces, Windows and NIRUX Settings. The Appearance group includes theme selection and a
 compositor toggle for picom transparency and shadows. The Wallpaper group has
 one entry that opens **NIRU Wallpaper**, where an image, its scale, rotation and
 the screen are chosen with previews; the launcher no longer repeats a list of
@@ -62,6 +63,22 @@ actions, display profiles (preview/keep/revert, arrange side by side, and a
 is installed, power profiles, diagnostics, work
 modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,
 themes, workspaces and confirmed session actions.
+
+### Wi-Fi
+
+`--wifi` is the Wi-Fi selector. It is also opened by the bar's Wi-Fi segment and
+by **Wi-Fi** under NIRUX Settings. The view lists the radio state, the connected
+network, saved profiles and scanned networks with signal and security. Enter
+connects or disconnects; Ctrl+R rescans; Escape closes. A password or hidden
+SSID is typed into the launcher and is never placed in a command line, log,
+snapshot or history.
+
+NetworkManager is controlled through its system D-Bus API, including connect,
+disconnect, saved-profile activation, forget and the `WirelessEnabled` radio
+property. Standalone `wpa_supplicant` systems use `wpa_cli` through a narrow
+installed sudoers rule; the secret is passed on stdin. iwd and ConnMan are
+detected and shown, but this release does not connect through them. Enterprise
+networks require a saved NetworkManager profile; WEP is refused.
 
 ### Web search
 

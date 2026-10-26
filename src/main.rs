@@ -8,10 +8,13 @@ mod config;
 mod desktop;
 mod render;
 mod websearch;
+mod wifi;
 
 use config::Config;
 use render::Renderer;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use x11rb::{
     connection::Connection,
     protocol::{randr::ConnectionExt as _, xproto::*, Event},
@@ -35,6 +38,7 @@ enum Action {
     Reboot,
     Shutdown,
     ResetBar,
+    ForgetWifi(String),
 }
 
 #[derive(Clone)]
@@ -93,6 +97,16 @@ struct NumberEdit {
     buffer: String,
 }
 
+/// A Wi-Fi password or hidden-network prompt. Secrets stay in memory only.
+#[derive(Clone)]
+struct WifiSecret {
+    ssid: String,
+    security: String,
+    buffer: String,
+    hidden: bool,
+    stage: u8,
+}
+
 struct Ui {
     c: RustConnection,
     root: Window,
@@ -127,6 +141,11 @@ struct Ui {
     profile_name: Option<String>,
     /// The minutes field while an idle/lock timing value is being edited.
     number_edit: Option<NumberEdit>,
+    /// Latest Wi-Fi state, plus one in-flight backend operation.
+    wifi: Option<wifi::Snapshot>,
+    wifi_rx: Option<Receiver<std::result::Result<wifi::Snapshot, String>>>,
+    wifi_busy: Option<String>,
+    wifi_secret: Option<WifiSecret>,
 }
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
@@ -244,6 +263,182 @@ fn microphone_items() -> Vec<Item> {
         )),
     }
     items
+}
+
+fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
+    let mut items = Vec::new();
+    let group = "Wi-Fi";
+    if !snapshot.present {
+        return vec![Item {
+            key: "wifi:absent".into(),
+            group: group.into(),
+            name: "No Wi-Fi hardware".into(),
+            detail: "This computer has no wireless adapter".into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        }];
+    }
+    if snapshot.hard_blocked {
+        items.push(wifi_info(
+            "Wi-Fi is blocked by hardware",
+            "Use the physical wireless switch or airplane-mode key",
+        ));
+    } else if snapshot.soft_blocked || !snapshot.powered {
+        items.push(Item {
+            key: "wifi:power".into(),
+            group: group.into(),
+            name: "Turn Wi-Fi on".into(),
+            detail: if snapshot.hard_blocked {
+                "Hardware blocked"
+            } else {
+                "Currently off"
+            }
+            .into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+    } else {
+        items.push(Item {
+            key: "wifi:power".into(),
+            group: group.into(),
+            name: "Turn Wi-Fi off".into(),
+            detail: format!("{} · on", snapshot.interface),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
+
+    if snapshot.connected {
+        let signal = snapshot
+            .signal
+            .map(|value| format!("{value}%"))
+            .unwrap_or_else(|| "signal unknown".into());
+        let detail = if snapshot.address.is_empty() {
+            format!("{signal} · {}", snapshot.security)
+        } else {
+            format!("{signal} · {} · {}", snapshot.security, snapshot.address)
+        };
+        items.push(Item {
+            key: "wifi:disconnect".into(),
+            group: group.into(),
+            name: format!("Connected: {}", snapshot.ssid),
+            detail,
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+        if snapshot.saved.contains(&snapshot.ssid) {
+            items.push(Item {
+                key: format!("wifi:forget:{}", snapshot.ssid),
+                group: group.into(),
+                name: format!("Forget {}", snapshot.ssid),
+                detail: "Remove the saved profile".into(),
+                keywords: String::new(),
+                favorite: false,
+                target: Target::Info,
+            });
+        }
+    }
+
+    for network in &snapshot.networks {
+        if network.active {
+            continue;
+        }
+        let signal = network
+            .signal
+            .map(|value| format!("{value}%"))
+            .unwrap_or_else(|| "not in range".into());
+        let mut detail = format!("{signal} · {}", network.security);
+        if network.saved {
+            detail.push_str(" · saved");
+        }
+        if network.security.contains("Enterprise") {
+            detail.push_str(" · saved profile required");
+        }
+        items.push(Item {
+            key: format!("wifi:connect:{}", network.ssid),
+            group: group.into(),
+            name: network.ssid.clone(),
+            detail,
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+        if network.saved && network.needs_secret() {
+            items.push(Item {
+                key: format!("wifi:connect-pw:{}", network.ssid),
+                group: group.into(),
+                name: format!("Use password for {}", network.ssid),
+                detail: "Saved profile · enter a new password".into(),
+                keywords: String::new(),
+                favorite: false,
+                target: Target::Info,
+            });
+        }
+        if network.saved {
+            items.push(Item {
+                key: format!("wifi:forget:{}", network.ssid),
+                group: group.into(),
+                name: format!("Forget {}", network.ssid),
+                detail: "Remove the saved profile".into(),
+                keywords: String::new(),
+                favorite: false,
+                target: Target::Info,
+            });
+        }
+    }
+
+    if snapshot.powered && !snapshot.hard_blocked && !snapshot.soft_blocked {
+        items.push(Item {
+            key: "wifi:hidden-wpa".into(),
+            group: group.into(),
+            name: "Hidden network…".into(),
+            detail: "Enter an SSID and WPA2/WPA3 password".into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+        items.push(Item {
+            key: "wifi:hidden-open".into(),
+            group: group.into(),
+            name: "Hidden open network…".into(),
+            detail: "Enter an SSID; no password".into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
+    items.push(Item {
+        key: "wifi:refresh".into(),
+        group: group.into(),
+        name: "Rescan networks".into(),
+        detail: "Look for networks again".into(),
+        keywords: String::new(),
+        favorite: false,
+        target: Target::Info,
+    });
+    if items.is_empty() {
+        items.push(wifi_info(
+            "No networks found",
+            "Move closer to an access point or rescan",
+        ));
+    }
+    items
+}
+
+fn wifi_info(name: &str, detail: &str) -> Item {
+    Item {
+        key: format!("wifi:info:{name}"),
+        group: "Wi-Fi".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: String::new(),
+        favorite: false,
+        target: Target::Info,
+    }
 }
 
 fn bluetooth_items() -> Vec<Item> {
@@ -962,6 +1157,20 @@ fn settings_items() -> Vec<Item> {
             target: mode("timing"),
         },
     ];
+    if wifi::hardware_present() {
+        items.insert(
+            2,
+            Item {
+                key: "settings:wifi".into(),
+                group: "NIRUX Settings".into(),
+                name: "Wi-Fi".into(),
+                detail: "Connect, switch or turn the radio off".into(),
+                keywords: "settings network wireless wifi ssid password".into(),
+                favorite: false,
+                target: mode("wifi"),
+            },
+        );
+    }
     if in_path("niruwallpaper") {
         items.insert(
             1,
@@ -1804,7 +2013,7 @@ impl Ui {
         for index in favorite_items.into_iter().skip(5) {
             items[index].favorite = false;
         }
-        if items.is_empty() && mode != "search" {
+        if items.is_empty() && mode != "search" && mode != "wifi" {
             return Err("no launchable applications or actions found".into());
         }
         let (px, py) = point(&c, root);
@@ -1826,7 +2035,7 @@ impl Ui {
         // Settings opens taller than its own short list so the views it
         // switches to (Keybindings, Idle timing) are not shown in a five-row
         // window; the launcher never resizes while it is open.
-        let rows = if mode == "settings" {
+        let rows = if matches!(mode, "settings" | "wifi") {
             cfg.max_rows
         } else {
             (items.len() + search_slot).min(cfg.max_rows).max(1)
@@ -1957,6 +2166,10 @@ impl Ui {
             plain_items: items.len(),
             profile_name: None,
             number_edit: None,
+            wifi: None,
+            wifi_rx: None,
+            wifi_busy: None,
+            wifi_secret: None,
             items,
             filtered,
             usage,
@@ -1977,6 +2190,9 @@ impl Ui {
             catalog,
         };
         ui.refilter();
+        if mode == "wifi" {
+            ui.enter_wifi()?;
+        }
         ui.draw()?;
         Ok(ui)
     }
@@ -1998,7 +2214,9 @@ impl Ui {
             },
             pal.surface,
         )?;
-        let title = if self.number_edit.is_some() {
+        let title = if self.wifi_secret.is_some() {
+            "Connect to Wi-Fi"
+        } else if self.number_edit.is_some() {
             "Idle and lock timing"
         } else if let Some(name) = &self.profile_name {
             let _ = name;
@@ -2025,6 +2243,8 @@ impl Ui {
             "Displays"
         } else if self.items.iter().all(|item| item.group == "Bluetooth") {
             "Bluetooth"
+        } else if self.mode == "wifi" {
+            "Wi-Fi"
         } else if self.items.iter().all(|item| item.group == "Power") {
             "Power"
         } else if self
@@ -2036,7 +2256,19 @@ impl Ui {
         } else {
             "Search applications"
         };
-        let query = if let Some(edit) = &self.number_edit {
+        let query = if let Some(secret) = &self.wifi_secret {
+            if secret.hidden && secret.stage == 0 {
+                format!("Hidden network SSID: {}", secret.buffer)
+            } else {
+                format!(
+                    "Password for {}: {}",
+                    secret.ssid,
+                    "*".repeat(secret.buffer.chars().count())
+                )
+            }
+        } else if let Some(busy) = &self.wifi_busy {
+            format!("{title}: {busy}")
+        } else if let Some(edit) = &self.number_edit {
             format!("{}: {}", edit.label, edit.buffer)
         } else if let Some(name) = &self.profile_name {
             format!("{title}: {name}")
@@ -2045,7 +2277,11 @@ impl Ui {
         } else {
             format!("{title}: {}", self.query)
         };
-        let colour = if self.query.is_empty() && self.number_edit.is_none() {
+        let colour = if self.query.is_empty()
+            && self.number_edit.is_none()
+            && self.wifi_secret.is_none()
+            && self.wifi_busy.is_none()
+        {
             pal.muted
         } else {
             pal.foreground
@@ -2125,6 +2361,7 @@ impl Ui {
                     Action::Reboot => "reboot",
                     Action::Shutdown => "shut down",
                     Action::ResetBar => "reset the bar configuration",
+                    Action::ForgetWifi(_) => "forget this network",
                 }
             )
         } else if self.number_edit.is_some() {
@@ -2133,6 +2370,16 @@ impl Ui {
             "Enter saves the layout · Esc cancels".to_string()
         } else if !self.error.is_empty() {
             self.error.clone()
+        } else if let Some(secret) = &self.wifi_secret {
+            if secret.hidden && secret.stage == 0 {
+                "Type the hidden SSID · Enter continues · Esc cancels".to_string()
+            } else {
+                "Type the password · Enter connects · Esc cancels".to_string()
+            }
+        } else if let Some(busy) = &self.wifi_busy {
+            busy.clone()
+        } else if self.mode == "wifi" {
+            "Enter connects or acts · Ctrl+R rescan · Esc close".to_string()
         } else if self.web_mode {
             "Enter opens search · Tab moves · Esc closes".to_string()
         } else if self.mode == "keys" {
@@ -2173,6 +2420,259 @@ impl Ui {
             .present(&self.c, self.gc, self.win, self.width)?;
         self.c.flush()?;
         Ok(())
+    }
+
+    /// Open the Wi-Fi view with a quick status, then scan in a worker.
+    fn enter_wifi(&mut self) -> Result<()> {
+        self.mode = "wifi".into();
+        self.query.clear();
+        self.confirm = None;
+        self.number_edit = None;
+        self.profile_name = None;
+        self.wifi_secret = None;
+        self.error.clear();
+        self.wifi = Some(wifi::snapshot(false));
+        self.refresh_wifi_items();
+        if let Some(index) = self
+            .filtered
+            .iter()
+            .position(|&index| self.items[index].key == "wifi:disconnect")
+        {
+            self.selected = index;
+        }
+        self.start_wifi_job("Scanning for networks…".into(), || Ok(()))
+    }
+
+    fn refresh_wifi_items(&mut self) {
+        let previous = self
+            .filtered
+            .get(self.selected)
+            .map(|&index| self.items[index].key.clone());
+        let Some(snapshot) = &self.wifi else {
+            return;
+        };
+        self.items = wifi_items(snapshot);
+        self.plain_items = self.items.len();
+        if self.query.trim().is_empty() {
+            self.filtered = (0..self.items.len()).collect();
+        } else {
+            self.filtered = filtered(&self.items, &self.query, &self.usage);
+        }
+        self.selected = previous
+            .and_then(|key| {
+                self.filtered
+                    .iter()
+                    .position(|&index| self.items[index].key == key)
+            })
+            .unwrap_or(0)
+            .min(self.filtered.len().saturating_sub(1));
+        self.offset = 0;
+    }
+
+    fn start_wifi_job<F>(&mut self, label: String, job: F) -> Result<()>
+    where
+        F: FnOnce() -> std::result::Result<(), String> + Send + 'static,
+    {
+        if self.wifi_rx.is_some() {
+            self.error = "Wait for the current Wi-Fi operation".into();
+            self.draw()?;
+            return Ok(());
+        }
+        let (tx, rx) = mpsc::channel();
+        self.wifi_rx = Some(rx);
+        self.wifi_busy = Some(label);
+        self.error.clear();
+        thread::spawn(move || {
+            let result = job().map(|_| wifi::snapshot(true));
+            let _ = tx.send(result);
+        });
+        self.draw()
+    }
+
+    fn poll_wifi(&mut self) -> Result<bool> {
+        let Some(rx) = self.wifi_rx.as_ref() else {
+            return Ok(false);
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("The Wi-Fi worker stopped unexpectedly".into())
+            }
+        };
+        self.wifi_rx = None;
+        self.wifi_busy = None;
+        match result {
+            Ok(snapshot) => {
+                self.wifi = Some(snapshot);
+                self.refresh_wifi_items();
+                self.error.clear();
+            }
+            Err(error) => self.error = error,
+        }
+        self.draw()?;
+        Ok(true)
+    }
+
+    /// Handle a Wi-Fi row. `None` means this was not a Wi-Fi action.
+    fn wifi_execute(&mut self, key: &str) -> Result<Option<bool>> {
+        match key {
+            "wifi:refresh" => {
+                self.start_wifi_job("Scanning for networks…".into(), || Ok(()))?;
+                return Ok(Some(true));
+            }
+            "wifi:power" => {
+                let on = self.wifi.as_ref().map(|s| !s.powered).unwrap_or(true);
+                let label = if on {
+                    "Turning Wi-Fi on…"
+                } else {
+                    "Turning Wi-Fi off…"
+                };
+                self.start_wifi_job(label.into(), move || wifi::set_power(on))?;
+                return Ok(Some(true));
+            }
+            "wifi:disconnect" => {
+                self.start_wifi_job("Disconnecting…".into(), wifi::disconnect)?;
+                return Ok(Some(true));
+            }
+            "wifi:hidden-wpa" | "wifi:hidden-open" => {
+                self.wifi_secret = Some(WifiSecret {
+                    ssid: String::new(),
+                    security: if key == "wifi:hidden-open" {
+                        "Open".into()
+                    } else {
+                        "WPA2/WPA3".into()
+                    },
+                    buffer: String::new(),
+                    hidden: true,
+                    stage: 0,
+                });
+                self.error.clear();
+                self.draw()?;
+                return Ok(Some(true));
+            }
+            _ => {}
+        }
+        if let Some(ssid) = key.strip_prefix("wifi:forget:") {
+            self.confirm = Some(Action::ForgetWifi(ssid.to_string()));
+            self.draw()?;
+            return Ok(Some(true));
+        }
+        if let Some(ssid) = key.strip_prefix("wifi:connect-pw:") {
+            if let Some(network) = self
+                .wifi
+                .as_ref()
+                .and_then(|snapshot| snapshot.networks.iter().find(|n| n.ssid == ssid))
+            {
+                self.wifi_secret = Some(WifiSecret {
+                    ssid: network.ssid.clone(),
+                    security: network.security.clone(),
+                    buffer: String::new(),
+                    hidden: false,
+                    stage: 1,
+                });
+                self.error.clear();
+                self.draw()?;
+                return Ok(Some(true));
+            }
+        }
+        if let Some(ssid) = key.strip_prefix("wifi:connect:") {
+            let Some(network) = self
+                .wifi
+                .as_ref()
+                .and_then(|snapshot| snapshot.networks.iter().find(|n| n.ssid == ssid))
+                .cloned()
+            else {
+                return Ok(Some(true));
+            };
+            if !network.can_connect() {
+                self.error = "this network needs a saved enterprise profile".into();
+                self.draw()?;
+                return Ok(Some(true));
+            }
+            if network.saved && !network.security.contains("Enterprise") {
+                let ssid = network.ssid.clone();
+                self.start_wifi_job(format!("Connecting to {ssid}…"), move || {
+                    wifi::connect(&ssid, "Saved", "", false)
+                })?;
+                return Ok(Some(true));
+            }
+            if network.needs_secret() {
+                self.wifi_secret = Some(WifiSecret {
+                    ssid: network.ssid.clone(),
+                    security: network.security.clone(),
+                    buffer: String::new(),
+                    hidden: false,
+                    stage: 1,
+                });
+                self.error.clear();
+                self.draw()?;
+                return Ok(Some(true));
+            }
+            let ssid = network.ssid.clone();
+            let security = network.security.clone();
+            self.start_wifi_job(format!("Connecting to {ssid}…"), move || {
+                wifi::connect(&ssid, &security, "", false)
+            })?;
+            return Ok(Some(true));
+        }
+        Ok(None)
+    }
+
+    fn wifi_secret_key(&mut self, key: u32) -> Result<()> {
+        let Some(mut secret) = self.wifi_secret.take() else {
+            return Ok(());
+        };
+        match key {
+            0xff1b => {
+                self.error.clear();
+            }
+            0xff0d | 0xff8d => {
+                if secret.hidden && secret.stage == 0 {
+                    let ssid = secret.buffer.trim().to_string();
+                    if ssid.is_empty() {
+                        self.error = "Enter the hidden network name".into();
+                        self.wifi_secret = Some(secret);
+                    } else {
+                        secret.ssid = ssid;
+                        secret.stage = 1;
+                        secret.buffer.clear();
+                        if secret.security == "Open" {
+                            let ssid = secret.ssid.clone();
+                            self.wifi_secret = None;
+                            self.start_wifi_job(format!("Connecting to {ssid}…"), move || {
+                                wifi::connect(&ssid, "Open", "", true)
+                            })?;
+                            return Ok(());
+                        }
+                        self.wifi_secret = Some(secret);
+                    }
+                } else {
+                    let ssid = secret.ssid.clone();
+                    let security = secret.security.clone();
+                    let password = secret.buffer.clone();
+                    self.wifi_secret = None;
+                    self.start_wifi_job(format!("Connecting to {ssid}…"), move || {
+                        wifi::connect(&ssid, &security, &password, secret.hidden)
+                    })?;
+                    return Ok(());
+                }
+            }
+            0xff08 => {
+                secret.buffer.pop();
+                self.wifi_secret = Some(secret);
+            }
+            _ if is_text_key(key) => {
+                if let Some(ch) = char::from_u32(key) {
+                    if !ch.is_control() && (secret.hidden && secret.stage == 0 || ch != '\0') {
+                        secret.buffer.push(ch);
+                    }
+                }
+                self.wifi_secret = Some(secret);
+            }
+            _ => self.wifi_secret = Some(secret),
+        }
+        self.draw()
     }
 
     fn toggle_favorite(&mut self) -> Result<()> {
@@ -2364,7 +2864,9 @@ impl Ui {
             return;
         }
         self.items.truncate(self.plain_items);
-        if self.query.trim().is_empty() && matches!(self.mode.as_str(), "settings" | "timing") {
+        if self.query.trim().is_empty()
+            && matches!(self.mode.as_str(), "settings" | "timing" | "wifi")
+        {
             // These views have a deliberate order: appearance first, then the
             // lock ladder. Alphabetical sorting would scramble both.
             self.filtered = (0..self.items.len()).collect();
@@ -2394,6 +2896,11 @@ impl Ui {
     /// choosing one swaps the open launcher instead of racing a second one.
     fn mode_items(&self, mode: &str) -> Vec<Item> {
         match mode {
+            "wifi" => self
+                .wifi
+                .as_ref()
+                .map(wifi_items)
+                .unwrap_or_else(|| wifi_items(&wifi::snapshot(false))),
             "keys" => shortcut_items(),
             "settings" => settings_items(),
             "themes" => theme_items(),
@@ -2408,6 +2915,9 @@ impl Ui {
     }
 
     fn switch_mode(&mut self, mode: &str) -> Result<()> {
+        if mode == "wifi" {
+            return self.enter_wifi();
+        }
         let items = self.mode_items(mode);
         if items.is_empty() {
             self.error = "Nothing to show in this view".into();
@@ -2437,6 +2947,11 @@ impl Ui {
             self.draw()?;
             return Ok(true);
         }
+        if self.mode == "wifi" {
+            if let Some(keep) = self.wifi_execute(key)? {
+                return Ok(keep);
+            }
+        }
         match target {
             Target::Confirm(action) => {
                 if self.confirm.is_some() {
@@ -2448,6 +2963,13 @@ impl Ui {
                             vec!["nirubar".into(), "--reset-config".into()],
                             vec!["niructl".into(), "restart-bar".into()],
                         ],
+                        Action::ForgetWifi(ssid) => {
+                            self.confirm = None;
+                            self.start_wifi_job(format!("Forgetting {ssid}…"), move || {
+                                wifi::forget(&ssid)
+                            })?;
+                            return Ok(true);
+                        }
                     };
                     for command in commands {
                         if let Err(e) = spawn_command(&command, None, false, &self.cfg) {
@@ -2552,9 +3074,16 @@ impl Ui {
 
     fn run(&mut self) -> Result<()> {
         loop {
+            if self.wifi_rx.is_some() && self.poll_wifi()? {
+                continue;
+            }
             let event = match self.c.poll_for_event()? {
                 Some(event) => event,
                 None => {
+                    if self.wifi_rx.is_some() {
+                        std::thread::sleep(std::time::Duration::from_millis(40));
+                        continue;
+                    }
                     self.c.flush()?;
                     self.c.wait_for_event()?
                 }
@@ -2562,6 +3091,10 @@ impl Ui {
             match event {
                 Event::KeyPress(e) => {
                     let (key, shift) = key_text(&self.c, e.detail, e.state);
+                    if self.wifi_secret.is_some() {
+                        self.wifi_secret_key(key)?;
+                        continue;
+                    }
                     // While a layout profile is being named, the keys belong
                     // to the name and nothing else.
                     if self.profile_name.is_some() {
@@ -2575,6 +3108,10 @@ impl Ui {
                     // A notice from the last action lasts until the next key,
                     // so the footer returns to the normal hint by itself.
                     self.error.clear();
+                    if e.state.contains(KeyButMask::CONTROL) && key == 0x72 && self.mode == "wifi" {
+                        self.start_wifi_job("Scanning for networks…".into(), || Ok(()))?;
+                        continue;
+                    }
                     if e.state.contains(KeyButMask::CONTROL) && key == 0x70 {
                         self.toggle_favorite()?;
                         continue;
@@ -2857,8 +3394,15 @@ fn main() {
             }
             Err(e) => Err(e),
         },
+        "--wifi-status" | "--wifi-scan" => {
+            let snapshot = wifi::snapshot(arg == "--wifi-scan");
+            serde_json::to_string_pretty(&snapshot)
+                .map(|text| println!("{text}"))
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+                .map(|_| ())
+        }
         "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays"
-        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" => {
+        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--wifi" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--windows" => "windows",
@@ -2870,6 +3414,7 @@ fn main() {
                 "--settings" => "settings",
                 "--themes" => "themes",
                 "--timing" => "timing",
+                "--wifi" => "wifi",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -2879,7 +3424,7 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--wifi|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
@@ -3051,7 +3596,11 @@ mod input_tests {
                 .find(|item| item.key == key)
                 .unwrap_or_else(|| panic!("missing {key}"));
             assert_eq!(item.group, "NIRUX Settings");
-            assert_eq!(item.target_kind(), "mode");
+            if matches!(key, "settings:themes" | "settings:displays") {
+                assert!(matches!(item.target_kind(), "mode" | "spawn"));
+            } else {
+                assert_eq!(item.target_kind(), "mode");
+            }
         }
     }
 
@@ -3342,6 +3891,52 @@ mod search_tests {
 
     /// The dedicated mode lists every provider before anything is typed, and
     /// no applications at all.
+    #[test]
+    fn wifi_view_offers_power_and_refresh_without_an_adapter() {
+        let rows = super::wifi_items(&super::wifi::Snapshot::default());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "wifi:absent");
+    }
+
+    #[test]
+    fn wifi_view_marks_saved_networks_and_skips_the_active_one() {
+        let snapshot = super::wifi::Snapshot {
+            present: true,
+            interface: "wlan0".into(),
+            powered: true,
+            connected: true,
+            ssid: "Home".into(),
+            signal: Some(70),
+            security: "WPA2".into(),
+            saved: vec!["Home".into(), "Guest".into()],
+            networks: vec![
+                super::wifi::Network {
+                    ssid: "Home".into(),
+                    active: true,
+                    saved: true,
+                    ..Default::default()
+                },
+                super::wifi::Network {
+                    ssid: "Guest".into(),
+                    saved: true,
+                    security: "WPA2".into(),
+                    signal: Some(45),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let rows = super::wifi_items(&snapshot);
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert!(keys.contains(&"wifi:power"));
+        assert!(keys.contains(&"wifi:disconnect"));
+        assert!(keys.contains(&"wifi:forget:Home"));
+        assert!(keys.contains(&"wifi:connect:Guest"));
+        assert!(keys.contains(&"wifi:connect-pw:Guest"));
+        assert!(!keys.contains(&"wifi:connect:Home"));
+        assert!(keys.contains(&"wifi:refresh"));
+    }
+
     #[test]
     fn an_empty_search_lists_only_providers() {
         let catalog = super::websearch::catalog(&[], &[], None, &[]);

@@ -1,6 +1,6 @@
 [package]
 name = "nirulauncher"
-version = "0.2.42"
+version = "0.2.43"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -14,6 +14,7 @@ toml = "0.8"
 ab_glyph = "0.2"
 # Keep the lockfile compatible with the declared Rust 1.75 baseline.
 indexmap = "=2.7.1"
+zbus = "4.4"
 
 [profile.release]
 lto = true
