@@ -53,7 +53,9 @@ the screen are chosen with previews; the launcher no longer repeats a list of
 images or single settings. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
 Centered, Centered floating, Floating and Fibonacci, plus previous/next.
 The list is alphabetical, with up to five pinned favourites first. Press
-Ctrl+P on a row to pin or unpin it.
+Ctrl+P on a row to pin or unpin it. Theme mode starts with **Open theme
+selector** when the graphical selector is installed, followed by the visible
+themes from the canonical catalogue.
 It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
 actions, display profiles (preview/keep/revert, arrange side by side, and a
 "turn this screen" entry for every rotation), a link to **NIRU Display** when it
@@ -141,8 +143,11 @@ Application matching accepts several words in any order, reads `.desktop`
 after exact, prefix and word matches. Favourites still come first.
 
 **NIRUX Settings** groups the existing tools: Appearance and themes, Wallpaper,
-Displays, Audio, Keybindings and Idle and lock timing. **Displays** opens NIRU
-Display when installed, otherwise the built-in profile view. **Keybindings** is read
+Displays, Audio, Keybindings and Idle and lock timing. **Appearance and themes**
+opens NIRU Theme Selector when installed and otherwise uses the fast launcher
+theme list. **Displays** opens NIRU Display when installed, otherwise the
+built-in profile view. The theme list is read from `niructl theme-catalog`, so
+user themes appear and hidden bundled themes stay hidden. **Keybindings** is read
 from NIRUWM's active table, so it includes your overrides and leaves out
 explicit unbinds. **Idle and lock timing** shows the effective minutes and lets
 you type a new value; it is written to the shared `[idle]` section without

@@ -742,29 +742,89 @@ fn theme_items() -> Vec<Item> {
         terminal: false,
         path: None,
     };
-    [
-        "niru-noir",
-        "niru-nord",
-        "niru-satie",
-        "niru-carl-larsson",
-        "niru-forest-vigil",
-        "niru-blood-of-urdr",
-        "niru-root-and-stone",
-        "niru-blue-horizon",
-        "niru-the-norns",
-        "niru-winter-nights",
-    ]
-    .into_iter()
-    .map(|theme| Item {
-        key: format!("action:theme:{theme}"),
-        group: "Appearance".into(),
-        name: format!("Theme: {theme}"),
-        detail: "Apply across WM, bar, saver and lock".into(),
-        keywords: format!("theme appearance {theme}"),
-        favorite: false,
-        target: niructl(&["theme", theme]),
-    })
-    .collect()
+    let mut items = Vec::new();
+    if in_path("niruthemeselector") {
+        items.push(Item {
+            key: "theme:open".into(),
+            group: "Appearance".into(),
+            name: "Open theme selector".into(),
+            detail: "Preview colours and wallpaper before applying".into(),
+            keywords: "theme appearance selector preview wallpaper colour".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["niruthemeselector".to_string()],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    let mut catalog = None;
+    if let Ok(output) = Command::new("niructl").args(["theme-catalog"]).output() {
+        if output.status.success() {
+            catalog = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+        }
+    }
+    if let Some(catalog) = catalog {
+        let active = catalog["active"].as_str().unwrap_or("");
+        if let Some(themes) = catalog["themes"].as_array() {
+            for theme in themes {
+                let id = theme["id"].as_str().unwrap_or("");
+                let name = theme["name"].as_str().unwrap_or(id);
+                if id.is_empty() || theme["hidden"].as_bool().unwrap_or(false) {
+                    continue;
+                }
+                if !theme["valid"].as_bool().unwrap_or(true) {
+                    continue;
+                }
+                let origin = if theme["overridden"].as_bool().unwrap_or(false) {
+                    "built-in override"
+                } else if theme["builtin"].as_bool().unwrap_or(false) {
+                    "built-in"
+                } else {
+                    "user"
+                };
+                items.push(Item {
+                    key: format!("action:theme:{id}"),
+                    group: "Appearance".into(),
+                    name: format!("Theme: {name}"),
+                    detail: if id == active {
+                        format!("active · {origin}")
+                    } else {
+                        format!("apply across WM, bar, saver and lock · {origin}")
+                    },
+                    keywords: format!("theme appearance {id} {name}"),
+                    favorite: false,
+                    target: niructl(&["theme", id]),
+                });
+            }
+        }
+    } else {
+        // A launcher installed before NIRUX, or a broken catalogue, still gets
+        // the built-in names instead of an empty Appearance list.
+        for theme in [
+            "niru-noir",
+            "niru-nord",
+            "niru-satie",
+            "niru-carl-larsson",
+            "niru-forest-vigil",
+            "niru-blood-of-urdr",
+            "niru-root-and-stone",
+            "niru-blue-horizon",
+            "niru-the-norns",
+            "niru-winter-nights",
+        ] {
+            items.push(Item {
+                key: format!("action:theme:{theme}"),
+                group: "Appearance".into(),
+                name: format!("Theme: {theme}"),
+                detail: "Apply across WM, bar, saver and lock".into(),
+                keywords: format!("theme appearance {theme}"),
+                favorite: false,
+                target: niructl(&["theme", theme]),
+            });
+        }
+    }
+    items
 }
 
 /// The active shortcut catalogue, read from NIRUWM.
@@ -829,6 +889,15 @@ fn shortcut_items() -> Vec<Item> {
 /// One place that opens the settings that already exist elsewhere.
 fn settings_items() -> Vec<Item> {
     let mode = |name: &str| Target::Mode(name.to_string());
+    let themes_target = if in_path("niruthemeselector") {
+        Target::Spawn {
+            argv: vec!["niruthemeselector".to_string()],
+            terminal: false,
+            path: None,
+        }
+    } else {
+        mode("themes")
+    };
     let displays_target = if in_path("nirudisplay") {
         Target::Spawn {
             argv: vec!["nirudisplay".to_string()],
@@ -843,10 +912,14 @@ fn settings_items() -> Vec<Item> {
             key: "settings:themes".into(),
             group: "NIRUX Settings".into(),
             name: "Appearance and themes".into(),
-            detail: "Apply a theme across the desktop".into(),
-            keywords: "settings appearance theme colours".into(),
+            detail: if in_path("niruthemeselector") {
+                "Graphical theme selector with previews".into()
+            } else {
+                "Apply a theme across the desktop".into()
+            },
+            keywords: "settings appearance theme colours wallpaper".into(),
             favorite: false,
-            target: mode("themes"),
+            target: themes_target,
         },
         Item {
             key: "settings:displays".into(),

@@ -1,6 +1,6 @@
 [package]
 name = "nirulauncher"
-version = "0.2.41"
+version = "0.2.42"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -9,6 +9,7 @@ description = "Native NIRU application and desktop-action launcher"
 [dependencies]
 x11rb = { version = "0.13", features = ["randr"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 ab_glyph = "0.2"
 # Keep the lockfile compatible with the declared Rust 1.75 baseline.
