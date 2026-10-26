@@ -56,7 +56,8 @@ The list is alphabetical, with up to five pinned favourites first. Press
 Ctrl+P on a row to pin or unpin it.
 It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
 actions, display profiles (preview/keep/revert, arrange side by side, and a
-"turn this screen" entry for every rotation), power profiles, diagnostics, work
+"turn this screen" entry for every rotation), a link to **NIRU Display** when it
+is installed, power profiles, diagnostics, work
 modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,
 themes, workspaces and confirmed session actions.
 
@@ -140,7 +141,8 @@ Application matching accepts several words in any order, reads `.desktop`
 after exact, prefix and word matches. Favourites still come first.
 
 **NIRUX Settings** groups the existing tools: Appearance and themes, Wallpaper,
-Displays, Audio, Keybindings and Idle and lock timing. **Keybindings** is read
+Displays, Audio, Keybindings and Idle and lock timing. **Displays** opens NIRU
+Display when installed, otherwise the built-in profile view. **Keybindings** is read
 from NIRUWM's active table, so it includes your overrides and leaves out
 explicit unbinds. **Idle and lock timing** shows the effective minutes and lets
 you type a new value; it is written to the shared `[idle]` section without

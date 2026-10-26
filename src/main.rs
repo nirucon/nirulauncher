@@ -509,6 +509,21 @@ fn spawn_niructl(args: &[&str]) -> Target {
 
 fn display_items() -> Vec<Item> {
     let mut items = Vec::new();
+    if in_path("nirudisplay") {
+        items.push(Item {
+            key: "display:open".into(),
+            group: "Displays".into(),
+            name: "Open display settings".into(),
+            detail: "Move screens, choose modes and rates, save profiles".into(),
+            keywords: "display screen monitor arrangement refresh rate profile".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["nirudisplay".to_string()],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
     if let Ok(output) = Command::new("niructl").args(["display", "list"]).output() {
         if output.status.success() {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -814,6 +829,15 @@ fn shortcut_items() -> Vec<Item> {
 /// One place that opens the settings that already exist elsewhere.
 fn settings_items() -> Vec<Item> {
     let mode = |name: &str| Target::Mode(name.to_string());
+    let displays_target = if in_path("nirudisplay") {
+        Target::Spawn {
+            argv: vec!["nirudisplay".to_string()],
+            terminal: false,
+            path: None,
+        }
+    } else {
+        mode("displays")
+    };
     let mut items = vec![
         Item {
             key: "settings:themes".into(),
@@ -828,10 +852,14 @@ fn settings_items() -> Vec<Item> {
             key: "settings:displays".into(),
             group: "NIRUX Settings".into(),
             name: "Displays".into(),
-            detail: "Profiles, rotation and arrangement".into(),
+            detail: if in_path("nirudisplay") {
+                "Graphical monitor editor and saved profiles".into()
+            } else {
+                "Profiles, rotation and arrangement".into()
+            },
             keywords: "settings display screen monitor profile".into(),
             favorite: false,
-            target: mode("displays"),
+            target: displays_target,
         },
         Item {
             key: "settings:audio".into(),
