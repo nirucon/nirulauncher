@@ -322,7 +322,7 @@ fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
             format!("{signal} · {} · {}", snapshot.security, snapshot.address)
         };
         items.push(Item {
-            key: "wifi:disconnect".into(),
+            key: "wifi:connected".into(),
             group: group.into(),
             name: format!("Connected: {}", snapshot.ssid),
             detail,
@@ -330,7 +330,16 @@ fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
             favorite: false,
             target: Target::Info,
         });
-        if snapshot.saved.contains(&snapshot.ssid) {
+        items.push(Item {
+            key: "wifi:disconnect".into(),
+            group: group.into(),
+            name: format!("Disconnect from {}", snapshot.ssid),
+            detail: "Disconnect this Wi-Fi link; keep the saved profile".into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+        if snapshot.saved.contains(&snapshot.ssid) && snapshot.active_profile.is_empty() {
             items.push(Item {
                 key: format!("wifi:forget:{}", snapshot.ssid),
                 group: group.into(),
@@ -341,6 +350,36 @@ fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
                 target: Target::Info,
             });
         }
+    }
+
+    for profile in &snapshot.profiles {
+        items.push(Item {
+            key: format!("wifi:profile:{}", profile.id),
+            group: group.into(),
+            name: format!("Saved: {}", profile.ssid),
+            detail: format!(
+                "{} · {}{}",
+                profile.security,
+                profile.id.rsplit('/').next().unwrap_or("profile"),
+                if profile.id == snapshot.active_profile {
+                    " · active"
+                } else {
+                    ""
+                }
+            ),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+        items.push(Item {
+            key: format!("wifi:forget:{}", profile.id),
+            group: group.into(),
+            name: format!("Forget saved profile: {}", profile.ssid),
+            detail: profile.id.clone(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
     }
 
     for network in &snapshot.networks {
@@ -378,7 +417,7 @@ fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
                 target: Target::Info,
             });
         }
-        if network.saved {
+        if network.saved && snapshot.manager != "NetworkManager" {
             items.push(Item {
                 key: format!("wifi:forget:{}", network.ssid),
                 group: group.into(),
@@ -427,6 +466,23 @@ fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
         ));
     }
     items
+}
+
+/// Search SSIDs, not command labels, security text or launcher favourites.
+fn wifi_filtered(items: &[Item], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            (query.is_empty()
+                || ((item.key.starts_with("wifi:connect:")
+                    || item.key.starts_with("wifi:profile:")
+                    || item.key == "wifi:connected")
+                    && item.name.to_lowercase().contains(&query)))
+            .then_some(index)
+        })
+        .collect()
 }
 
 fn wifi_info(name: &str, detail: &str) -> Item {
@@ -783,9 +839,20 @@ fn display_items() -> Vec<Item> {
             }
         }
     }
-    if let Ok(output) = Command::new("niructl").args(["display", "status"]).output() {
-        let status = String::from_utf8_lossy(&output.stdout);
-        if status.trim_start().starts_with("display preview ") && !status.contains("off") {
+    if let Ok(output) = Command::new("niructl")
+        .args(["display", "status", "--json"])
+        .output()
+    {
+        let token = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .ok()
+            .and_then(|state| {
+                state
+                    .get("preview")
+                    .and_then(|preview| preview.get("token"))
+                    .and_then(|token| token.as_str())
+                    .map(str::to_owned)
+            });
+        if let Some(token) = token {
             items.push(Item {
                 key: "display:keep".into(),
                 group: "Displays".into(),
@@ -793,7 +860,7 @@ fn display_items() -> Vec<Item> {
                 detail: "Confirm the preview".into(),
                 keywords: String::new(),
                 favorite: false,
-                target: spawn_niructl(&["display", "keep"]),
+                target: spawn_niructl(&["display", "keep", &token]),
             });
             items.push(Item {
                 key: "display:revert".into(),
@@ -802,7 +869,7 @@ fn display_items() -> Vec<Item> {
                 detail: "Return to the previous layout".into(),
                 keywords: String::new(),
                 favorite: false,
-                target: spawn_niructl(&["display", "revert"]),
+                target: spawn_niructl(&["display", "revert", &token]),
             });
         }
     }
@@ -2455,12 +2522,17 @@ impl Ui {
         self.profile_name = None;
         self.wifi_secret = None;
         self.error.clear();
-        self.wifi = Some(wifi::snapshot(false));
+        // Mapping the window must not wait for D-Bus or privilege prompts.
+        self.wifi = Some(wifi::Snapshot {
+            present: wifi::hardware_present(),
+            powered: true,
+            ..Default::default()
+        });
         self.refresh_wifi_items();
         if let Some(index) = self
             .filtered
             .iter()
-            .position(|&index| self.items[index].key == "wifi:disconnect")
+            .position(|&index| self.items[index].key == "wifi:connected")
         {
             self.selected = index;
         }
@@ -2477,11 +2549,7 @@ impl Ui {
         };
         self.items = wifi_items(snapshot);
         self.plain_items = self.items.len();
-        if self.query.trim().is_empty() {
-            self.filtered = (0..self.items.len()).collect();
-        } else {
-            self.filtered = filtered(&self.items, &self.query, &self.usage);
-        }
+        self.filtered = wifi_filtered(&self.items, &self.query);
         self.selected = previous
             .and_then(|key| {
                 self.filtered
@@ -2528,9 +2596,17 @@ impl Ui {
         self.wifi_busy = None;
         match result {
             Ok(snapshot) => {
+                let first_scan = self.wifi.as_ref().is_some_and(|old| old.manager.is_empty());
+                self.error = snapshot.error.clone();
                 self.wifi = Some(snapshot);
                 self.refresh_wifi_items();
-                self.error.clear();
+                if first_scan && self.query.trim().is_empty() {
+                    self.selected = self
+                        .filtered
+                        .iter()
+                        .position(|&index| self.items[index].key == "wifi:connected")
+                        .unwrap_or(0);
+                }
             }
             Err(error) => self.error = error,
         }
@@ -2540,6 +2616,13 @@ impl Ui {
 
     /// Handle a Wi-Fi row. `None` means this was not a Wi-Fi action.
     fn wifi_execute(&mut self, key: &str) -> Result<Option<bool>> {
+        if let Some(id) = key.strip_prefix("wifi:profile:") {
+            let id = id.to_owned();
+            self.start_wifi_job("Activating saved profile…".into(), move || {
+                wifi::connect_profile(&id)
+            })?;
+            return Ok(Some(true));
+        }
         match key {
             "wifi:refresh" => {
                 self.start_wifi_job("Scanning for networks…".into(), || Ok(()))?;
@@ -2559,6 +2642,7 @@ impl Ui {
                 self.start_wifi_job("Disconnecting…".into(), wifi::disconnect)?;
                 return Ok(Some(true));
             }
+            "wifi:connected" => return Ok(Some(true)),
             "wifi:hidden-wpa" | "wifi:hidden-open" => {
                 self.wifi_secret = Some(WifiSecret {
                     ssid: String::new(),
@@ -2860,6 +2944,10 @@ impl Ui {
     fn refilter(&mut self) {
         self.confirm = None;
         self.error.clear();
+        if self.mode == "wifi" {
+            self.refresh_wifi_items();
+            return;
+        }
         if self.web_mode {
             let previous = self
                 .filtered
@@ -3965,6 +4053,33 @@ mod search_tests {
         let rows = super::wifi_items(&super::wifi::Snapshot::default());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, "wifi:absent");
+    }
+
+    #[test]
+    fn wifi_search_matches_ssids_instead_of_action_labels_and_clears() {
+        let snapshot = super::wifi::Snapshot {
+            present: true,
+            powered: true,
+            networks: vec![
+                super::wifi::Network {
+                    ssid: "Räknät hemma".into(),
+                    security: "WPA2".into(),
+                    ..Default::default()
+                },
+                super::wifi::Network {
+                    ssid: "Other".into(),
+                    security: "WPA2".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let rows = super::wifi_items(&snapshot);
+        let matches = super::wifi_filtered(&rows, "RÄKNÄT");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(rows[matches[0]].name, "Räknät hemma");
+        assert!(super::wifi_filtered(&rows, "WPA2").is_empty());
+        assert_eq!(super::wifi_filtered(&rows, "").len(), rows.len());
     }
 
     #[test]

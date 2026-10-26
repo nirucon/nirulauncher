@@ -18,6 +18,8 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+#[path = "wifi_native.rs"]
+mod native;
 
 const NM: &str = "org.freedesktop.NetworkManager";
 const NM_PATH: &str = "/org/freedesktop/NetworkManager";
@@ -74,6 +76,15 @@ pub struct Snapshot {
     pub error: String,
     pub networks: Vec<Network>,
     pub saved: Vec<String>,
+    pub profiles: Vec<SavedProfile>,
+    pub active_profile: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SavedProfile {
+    pub id: String,
+    pub ssid: String,
+    pub security: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -133,7 +144,7 @@ pub fn snapshot(scan: bool) -> Snapshot {
     let result = match manager {
         Manager::NetworkManager => nm_snapshot(&interface, scan),
         Manager::WpaSupplicant => wpa_snapshot(&interface, scan),
-        Manager::Iwd | Manager::ConnMan => Ok(unsupported_snapshot(&interface, manager)),
+        Manager::Iwd | Manager::ConnMan => native::snapshot(&interface, manager, scan),
         Manager::None => Err("No supported Wi-Fi manager owns this interface".into()),
     };
     match result {
@@ -160,47 +171,29 @@ pub fn snapshot(scan: bool) -> Snapshot {
     }
 }
 
-fn unsupported_snapshot(interface: &str, manager: Manager) -> Snapshot {
-    let link = iw_link(interface);
-    Snapshot {
-        present: true,
-        interface: interface.into(),
-        manager: manager.label().into(),
-        powered: true,
-        connected: link.connected,
-        ssid: link.ssid,
-        signal: link.signal,
-        state: if link.connected { "connected" } else { "disconnected" }.into(),
-        detail: format!(
-            "{} owns this adapter. This release can show its link state, but connecting and switching networks require a NetworkManager or wpa_supplicant backend.",
-            manager.label()
-        ),
-        ..Default::default()
-    }
-}
-
 fn manager_for(interface: &str) -> (Manager, (bool, bool)) {
     let blocked = rfkill_state();
     if let Ok(conn) = Connection::system() {
-        if name_has_owner(&conn, NM) && nm_device_path(&conn, interface).is_ok() {
-            return (Manager::NetworkManager, blocked);
+        if name_has_owner(&conn, NM) {
+            return (
+                if nm_device_path(&conn, interface).is_ok() {
+                    Manager::NetworkManager
+                } else {
+                    Manager::None
+                },
+                blocked,
+            );
         }
-        if name_has_owner(&conn, "net.connman.iwd") {
+        if name_has_owner(&conn, "net.connman.iwd") && native::owns(interface, Manager::Iwd) {
             return (Manager::Iwd, blocked);
         }
-        if name_has_owner(&conn, "net.connman") {
+        if name_has_owner(&conn, "net.connman") && native::owns(interface, Manager::ConnMan) {
             return (Manager::ConnMan, blocked);
         }
     }
     let sock = Path::new("/run/wpa_supplicant").join(interface);
-    if sock.exists() || wpa_process_running() {
+    if sock.exists() && wpa_process_running() {
         return (Manager::WpaSupplicant, blocked);
-    }
-    if command_path("iwctl").is_some() {
-        return (Manager::Iwd, blocked);
-    }
-    if command_path("connmanctl").is_some() {
-        return (Manager::ConnMan, blocked);
     }
     (Manager::None, blocked)
 }
@@ -227,6 +220,9 @@ fn nm_device_path(conn: &Connection, interface: &str) -> Result<OwnedObjectPath,
     for path in devices {
         let props = get_all(conn, NM, path.as_str(), NM_DEVICE)?;
         if string_prop(&props, "Interface").as_deref() == Some(interface) {
+            if !bool_prop(&props, "Managed").unwrap_or(false) {
+                return Err(format!("NetworkManager leaves {interface} unmanaged"));
+            }
             return Ok(path);
         }
     }
@@ -254,7 +250,15 @@ fn nm_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     };
 
     let saved = nm_saved(&conn).unwrap_or_default();
-    snap.saved = saved.keys().cloned().collect();
+    snap.saved = saved.iter().map(|(ssid, _, _)| ssid.clone()).collect();
+    snap.profiles = saved
+        .iter()
+        .map(|(ssid, security, path)| SavedProfile {
+            id: path.to_string(),
+            ssid: ssid.clone(),
+            security: security.clone(),
+        })
+        .collect();
     snap.saved.sort();
 
     if scan {
@@ -287,7 +291,7 @@ fn nm_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
                     let frequency = u32_prop(&props, "Frequency");
                     let bssid = string_prop(&props, "HwAddress");
                     let entry = Network {
-                        saved: saved.contains_key(&ssid),
+                        saved: saved.iter().any(|(name, _, _)| name == &ssid),
                         signal,
                         security,
                         frequency,
@@ -311,6 +315,7 @@ fn nm_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     let mut current = String::new();
     if let Some(active) = active {
         if let Ok(active_props) = get_all(&conn, NM, active.as_str(), NM_ACTIVE) {
+            snap.active_profile = path_prop(&active_props, "Connection").unwrap_or_default();
             let id = string_prop(&active_props, "Id").unwrap_or_default();
             if let Some(specific) = path_prop(&active_props, "SpecificObject") {
                 if let Ok(ap_props) = get_all(&conn, NM, &specific, NM_AP) {
@@ -340,11 +345,12 @@ fn nm_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     }
     if !current.is_empty() {
         snap.ssid = current.clone();
-        snap.connected = true;
-        snap.state = "connected".into();
+        if snap.connected {
+            snap.state = "connected".into();
+        }
     }
 
-    for (ssid, (security, _)) in saved {
+    for (ssid, security, _) in saved {
         if networks.keys().any(|(name, _)| name == &ssid) {
             continue;
         }
@@ -390,7 +396,7 @@ fn nm_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     Ok(snap)
 }
 
-fn nm_saved(conn: &Connection) -> Result<HashMap<String, (String, OwnedObjectPath)>, String> {
+fn nm_saved(conn: &Connection) -> Result<Vec<(String, String, OwnedObjectPath)>, String> {
     let settings = proxy(
         conn,
         NM,
@@ -400,7 +406,7 @@ fn nm_saved(conn: &Connection) -> Result<HashMap<String, (String, OwnedObjectPat
     let paths: Vec<OwnedObjectPath> = settings
         .call("ListConnections", &())
         .map_err(|e| format!("Saved networks: {e}"))?;
-    let mut out = HashMap::new();
+    let mut out = Vec::new();
     for path in paths {
         let path_string = path.to_string();
         let conn_proxy = proxy(
@@ -437,7 +443,7 @@ fn nm_saved(conn: &Connection) -> Result<HashMap<String, (String, OwnedObjectPat
             }
             None => "Open".into(),
         };
-        out.insert(ssid, (security, path));
+        out.push((ssid, security, path));
     }
     Ok(out)
 }
@@ -455,7 +461,7 @@ pub fn connect(ssid: &str, security: &str, password: &str, hidden: bool) -> Resu
         return Err("WEP is not supported; choose a WPA2 or WPA3 network".into());
     }
     if !matches!(security, "Open" | "OWE" | "Unknown" | "Saved") && !security.starts_with("Saved") {
-        let valid = (8..=63).contains(&password.chars().count())
+        let valid = (8..=63).contains(&password.len())
             || (password.len() == 64 && password.chars().all(|c| c.is_ascii_hexdigit()));
         if !valid {
             return Err("A WPA password must be 8–63 characters or 64 hex digits".into());
@@ -466,11 +472,15 @@ pub fn connect(ssid: &str, security: &str, password: &str, hidden: bool) -> Resu
     };
     match manager_for(&interface).0 {
         Manager::NetworkManager => nm_connect(&interface, ssid, security, password, hidden),
-        Manager::WpaSupplicant => wpa_connect(&interface, ssid, security, password),
-        Manager::Iwd | Manager::ConnMan => Err(format!(
-            "{} is not supported for connecting in this release",
-            manager_for(&interface).0.label()
-        )),
+        Manager::WpaSupplicant => wpa_connect(&interface, ssid, security, password, hidden),
+        manager @ (Manager::Iwd | Manager::ConnMan) => {
+            if hidden {
+                return Err(
+                    "Hidden networks require an existing backend profile for this adapter".into(),
+                );
+            }
+            native::connect(&interface, manager, ssid, password)
+        }
         Manager::None => Err("No supported Wi-Fi manager owns this interface".into()),
     }
 }
@@ -487,6 +497,9 @@ pub fn disconnect() -> Result<(), String> {
             result
         }
         Manager::WpaSupplicant => wpa_run(&interface, &["disconnect"]).map(|_| ()),
+        manager @ (Manager::Iwd | Manager::ConnMan) => {
+            native::control(&interface, manager, "disconnect", None)
+        }
         _ => Err(format!(
             "{} cannot be controlled in this release",
             manager.label()
@@ -500,20 +513,30 @@ pub fn forget(ssid: &str) -> Result<(), String> {
         Manager::NetworkManager => {
             let conn = Connection::system().map_err(|e| e.to_string())?;
             let saved = nm_saved(&conn)?;
-            let Some((_, path)) = saved.get(ssid) else {
+            let matches: Vec<_> = saved
+                .iter()
+                .filter(|(name, _, path)| path.as_str() == ssid || name == ssid)
+                .collect();
+            if matches.len() > 1 {
+                return Err("Choose the exact saved profile before forgetting it".into());
+            }
+            let Some((_, _, path)) = matches.first().copied() else {
                 return Err("That network has no saved profile".into());
             };
             let settings = proxy(
                 &conn,
                 NM,
-                NM_SETTINGS,
-                "org.freedesktop.NetworkManager.Settings",
+                path.as_str(),
+                "org.freedesktop.NetworkManager.Settings.Connection",
             )?;
             settings
-                .call::<_, _, ()>("DeleteConnection", &(path.clone(),))
+                .call::<_, _, ()>("Delete", &())
                 .map_err(|e| format!("Forget {ssid}: {e}"))
         }
         Manager::WpaSupplicant => wpa_forget(&interface, ssid),
+        manager @ (Manager::Iwd | Manager::ConnMan) => {
+            native::control(&interface, manager, "forget", Some(ssid))
+        }
         _ => Err(format!(
             "{} cannot be controlled in this release",
             manager.label()
@@ -535,9 +558,16 @@ pub fn set_power(on: bool) -> Result<(), String> {
                 .map_err(|e| format!("Wi-Fi power: {e}"))
         }
         Manager::WpaSupplicant => {
-            let state = if on { "unblock" } else { "block" };
-            let rfkill = command_path("rfkill").ok_or("rfkill is not installed")?;
-            privileged(&rfkill, &[state.to_string(), "wlan".to_string()], None).map(|_| ())
+            let helper = Path::new("/usr/libexec/nirux-wifi");
+            privileged(
+                helper,
+                &["radio".into(), if on { "on" } else { "off" }.into()],
+                None,
+            )
+            .map(|_| ())
+        }
+        manager @ (Manager::Iwd | Manager::ConnMan) => {
+            native::control(&_interface, manager, if on { "on" } else { "off" }, None)
         }
         _ => Err(format!(
             "{} cannot be controlled in this release",
@@ -563,6 +593,55 @@ fn ov_bytes(value: &[u8]) -> OwnedValue {
     OwnedValue::try_from(Value::from(value.to_vec())).expect("byte array value")
 }
 
+pub fn connect_profile(id: &str) -> Result<(), String> {
+    let (interface, manager) = current()?;
+    if manager != Manager::NetworkManager {
+        return Err("That profile belongs to another backend".into());
+    }
+    let conn = Connection::system().map_err(|e| e.to_string())?;
+    let profile = nm_saved(&conn)?
+        .into_iter()
+        .find(|(_, _, path)| path.as_str() == id)
+        .ok_or("Saved profile no longer exists; refresh the list")?;
+    let device = nm_device_path(&conn, &interface)?;
+    proxy(&conn, NM, NM_PATH, NM)?
+        .call::<_, _, OwnedObjectPath>(
+            "ActivateConnection",
+            &(
+                profile.2.clone(),
+                device.clone(),
+                OwnedObjectPath::try_from("/").unwrap(),
+            ),
+        )
+        .map_err(|e| format!("Activate saved profile: {e}"))?;
+    wait_nm_activation(&conn, &device, &profile.2)
+}
+
+fn wait_nm_activation(
+    conn: &Connection,
+    device: &OwnedObjectPath,
+    profile: &OwnedObjectPath,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(35);
+    while std::time::Instant::now() < deadline {
+        let props = get_all(conn, NM, device.as_str(), NM_DEVICE)?;
+        let state = u32_prop(&props, "State").unwrap_or(0);
+        if state == 100 {
+            if let Some(active) = path_prop(&props, "ActiveConnection") {
+                let active = get_all(conn, NM, &active, NM_ACTIVE)?;
+                if path_prop(&active, "Connection").as_deref() == Some(profile.as_str()) {
+                    return Ok(());
+                }
+            }
+        }
+        if state == 120 {
+            return Err("Connection failed; check authentication and address configuration".into());
+        }
+        std::thread::sleep(Duration::from_millis(350));
+    }
+    Err("Connection has not completed; check the backend state before retrying".into())
+}
+
 fn nm_connect(
     interface: &str,
     ssid: &str,
@@ -575,7 +654,19 @@ fn nm_connect(
     let nm = proxy(&conn, NM, NM_PATH, NM)?;
     if password.is_empty() && !hidden {
         if let Ok(saved) = nm_saved(&conn) {
-            if let Some((_, path)) = saved.get(ssid) {
+            let matches: Vec<_> = saved
+                .iter()
+                .filter(|(name, kind, _)| {
+                    name == ssid
+                        && (security == "Saved" || kind.contains(security) || kind == security)
+                })
+                .collect();
+            if matches.len() > 1 {
+                return Err(
+                    "Several saved profiles match; choose an exact Saved profile row".into(),
+                );
+            }
+            if let Some((_, _, path)) = matches.first().copied() {
                 nm.call::<_, _, OwnedObjectPath>(
                     "ActivateConnection",
                     &(
@@ -585,7 +676,7 @@ fn nm_connect(
                     ),
                 )
                 .map_err(|e| format!("Connect {ssid}: {e}"))?;
-                return Ok(());
+                return wait_nm_activation(&conn, &device, path);
             }
         }
         if !security.starts_with("Saved") && security != "Open" && security != "OWE" {
@@ -624,12 +715,17 @@ fn nm_connect(
     let mut ipv6 = HashMap::new();
     ipv6.insert("method".into(), ov_string("auto"));
     settings.insert("ipv6".into(), ipv6);
-    nm.call::<_, _, (OwnedObjectPath, OwnedObjectPath)>(
-        "AddAndActivateConnection",
-        &(settings, device, OwnedObjectPath::try_from("/").unwrap()),
-    )
-    .map_err(|e| format!("Connect {ssid}: {e}"))?;
-    Ok(())
+    let (profile, _) = nm
+        .call::<_, _, (OwnedObjectPath, OwnedObjectPath)>(
+            "AddAndActivateConnection",
+            &(
+                settings,
+                device.clone(),
+                OwnedObjectPath::try_from("/").unwrap(),
+            ),
+        )
+        .map_err(|e| format!("Connect {ssid}: {e}"))?;
+    wait_nm_activation(&conn, &device, &profile)
 }
 
 fn wpa_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
@@ -772,31 +868,46 @@ fn wpa_saved(interface: &str) -> Result<Vec<(String, usize)>, String> {
     Ok(out)
 }
 
-fn wpa_connect(interface: &str, ssid: &str, security: &str, password: &str) -> Result<(), String> {
+fn wpa_connect(
+    interface: &str,
+    ssid: &str,
+    security: &str,
+    password: &str,
+    hidden: bool,
+) -> Result<(), String> {
+    let ssid_q = wpa_quote(ssid)?;
+    wpa_quote(password)?;
     if security.contains("Enterprise") {
         return Err("Enterprise networks need a saved wpa_supplicant profile".into());
     }
     if password.is_empty() {
         if let Ok(saved) = wpa_saved(interface) {
             if let Some((_, id)) = saved.into_iter().find(|(name, _)| name == ssid) {
-                wpa_run_stdin(
-                    interface,
-                    &format!("select_network {id}\nsave_config\nquit\n"),
-                )?;
-                return Ok(());
+                wpa_run_stdin(interface, &format!("select_network {id}\nquit\n"))?;
+                return wait_wpa_activation(interface, ssid);
             }
         }
         if !matches!(security, "Open" | "OWE") {
             return Err("This network needs a password".into());
         }
     }
+    let previous = wpa_run(interface, &["status"]).ok().and_then(|out| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("id=")
+                    .and_then(|id| id.parse::<usize>().ok())
+            })
+    });
     let output = wpa_run(interface, &["add_network"])?;
     let id = String::from_utf8_lossy(&output.stdout)
         .lines()
         .find_map(|line| line.trim().parse::<usize>().ok())
         .ok_or("wpa_supplicant did not allocate a network")?;
-    let ssid_q = wpa_quote(ssid)?;
     let mut commands = format!("set_network {id} ssid \"{ssid_q}\"\n");
+    if hidden {
+        commands.push_str(&format!("set_network {id} scan_ssid 1\n"));
+    }
     match security {
         "Open" | "Unknown" | "Saved" => {
             commands.push_str(&format!("set_network {id} key_mgmt NONE\n"));
@@ -821,10 +932,60 @@ fn wpa_connect(interface: &str, ssid: &str, security: &str, password: &str) -> R
             commands.push_str(&format!("set_network {id} psk \"{password}\"\n"));
         }
     }
-    commands.push_str(&format!(
-        "enable_network {id}\nselect_network {id}\nsave_config\nquit\n"
-    ));
-    wpa_run_stdin(interface, &commands).map(|_| ())
+    commands.push_str(&format!("enable_network {id}\nselect_network {id}\nquit\n"));
+    let result = wpa_run_stdin(interface, &commands)
+        .and_then(|_| wait_wpa_activation(interface, ssid))
+        .and_then(|_| wpa_run_stdin(interface, "save_config\nquit\n").map(|_| ()));
+    if let Err(error) = result {
+        let mut restore = format!("remove_network {id}\n");
+        if let Some(previous) = previous {
+            restore.push_str(&format!("select_network {previous}\n"));
+        }
+        restore.push_str("quit\n");
+        let _ = wpa_run_stdin(interface, &restore);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn wait_wpa_activation(interface: &str, ssid: &str) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(35);
+    while std::time::Instant::now() < deadline {
+        let output = wpa_run(interface, &["status"])?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let completed = text.lines().any(|line| line == "wpa_state=COMPLETED");
+        let correct = text
+            .lines()
+            .any(|line| line.strip_prefix("ssid=") == Some(ssid));
+        if completed && correct {
+            let addressed = Command::new("ip")
+                .args(["-j", "address", "show", "dev", interface])
+                .output()
+                .ok()
+                .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+                .and_then(|value| value.as_array().cloned())
+                .is_some_and(|devices| {
+                    devices.iter().any(|device| {
+                        device
+                            .get("addr_info")
+                            .and_then(|a| a.as_array())
+                            .is_some_and(|addresses| {
+                                addresses.iter().any(|address| {
+                                    address.get("scope").and_then(|v| v.as_str()) == Some("global")
+                                })
+                            })
+                    })
+                });
+            if addressed {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(
+        "Wi-Fi authentication or address configuration did not complete; previous profile retained"
+            .into(),
+    )
 }
 
 fn wpa_forget(interface: &str, ssid: &str) -> Result<(), String> {
@@ -861,11 +1022,23 @@ fn wpa_run_stdin(interface: &str, input: &str) -> Result<Output, String> {
 }
 
 fn privileged(program: &Path, args: &[String], input: Option<&str>) -> Result<Output, String> {
+    let helper = Path::new("/usr/libexec/nirux-wifi");
+    if !helper.is_file() {
+        return Err("Standalone Wi-Fi permissions are missing. Run nirux update to install the restricted Wi-Fi helper.".into());
+    }
+    let _ = program; // Never elevate an arbitrary CLI, even when it is system-owned.
+    let program = helper;
     let sudo = command_path("sudo").ok_or("sudo is not installed")?;
     let mut command = Command::new(sudo);
     command.arg("-n").arg(program).args(args);
     let output = run_with_input(&mut command, input)?;
     if output.status.success() {
+        if String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim().starts_with("FAIL"))
+        {
+            return Err("The Wi-Fi backend rejected the operation".into());
+        }
         return Ok(output);
     }
     let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
