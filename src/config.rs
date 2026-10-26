@@ -19,6 +19,12 @@ pub struct Config {
     pub favorites: Vec<String>,
     /// Engines added to, or turned off from, the built-in search list.
     pub search_sources: Vec<crate::websearch::ConfigSource>,
+    /// Engine ids in the order the rows should appear.
+    pub search_order: Vec<String>,
+    /// The engine selected when the search field is empty.
+    pub search_default: Option<String>,
+    /// `(alias, source id)` pairs; these override built-in aliases.
+    pub search_aliases: Vec<(String, String)>,
     pub palette: Palette,
 }
 
@@ -68,6 +74,9 @@ impl Default for Config {
             browser: Vec::new(),
             favorites: Vec::new(),
             search_sources: Vec::new(),
+            search_order: Vec::new(),
+            search_default: None,
+            search_aliases: Vec::new(),
             palette: Palette::default(),
         }
     }
@@ -97,6 +106,10 @@ fn search_sources_from(v: &toml::Value) -> Vec<crate::websearch::ConfigSource> {
                             .and_then(|url| url.as_str())
                             .unwrap_or_default()
                             .to_string(),
+                        alias: entry
+                            .get("alias")
+                            .and_then(|alias| alias.as_str())
+                            .map(str::to_string),
                         enabled: entry
                             .get("enabled")
                             .and_then(|enabled| enabled.as_bool())
@@ -106,6 +119,50 @@ fn search_sources_from(v: &toml::Value) -> Vec<crate::websearch::ConfigSource> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `[search]` order, default and alias table.
+fn search_preferences(v: &toml::Value) -> (Vec<String>, Option<String>, Vec<(String, String)>) {
+    let Some(search) = v.get("search") else {
+        return (Vec::new(), None, Vec::new());
+    };
+    let order = search
+        .get("order")
+        .and_then(|order| order.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.as_str())
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let default = search
+        .get("default")
+        .and_then(|default| default.as_str())
+        .map(str::trim)
+        .filter(|default| !default.is_empty())
+        .map(str::to_string);
+    let aliases = search
+        .get("aliases")
+        .and_then(|aliases| aliases.as_table())
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(alias, id)| {
+                    let id = id.as_str()?.trim();
+                    let alias = alias.trim();
+                    if id.is_empty() || alias.is_empty() || alias.contains(char::is_whitespace) {
+                        return None;
+                    }
+                    Some((alias.to_string(), id.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (order, default, aliases)
 }
 
 fn config_home() -> PathBuf {
@@ -376,6 +433,10 @@ impl Config {
             cfg.favorites = f;
         }
         cfg.search_sources = search_sources_from(v);
+        let (order, default, aliases) = search_preferences(v);
+        cfg.search_order = order;
+        cfg.search_default = default;
+        cfg.search_aliases = aliases;
         cfg.palette = suite_palette_from(&config_home());
         if let Some(appearance) = appearance_value(&config_home()) {
             if v.get("font_size").is_none() {
@@ -434,6 +495,14 @@ impl Config {
                 self.browser.join(" ")
             },
             custom
+        ) + &format!(
+            "\nsearch default: {}\nsearch order: {}",
+            self.search_default.as_deref().unwrap_or("first engine"),
+            if self.search_order.is_empty() {
+                "built-in".to_string()
+            } else {
+                self.search_order.join(", ")
+            }
         )
     }
 }

@@ -46,6 +46,8 @@ enum Target {
     },
     Focus(Window),
     Confirm(Action),
+    /// Switch the open launcher to another view without starting a second one.
+    Mode(String),
     Info,
 }
 
@@ -56,6 +58,8 @@ struct Item {
     group: String,
     name: String,
     detail: String,
+    /// Extra searchable words from a desktop entry (Keywords, comment).
+    keywords: String,
     favorite: bool,
     target: Target,
 }
@@ -68,6 +72,25 @@ impl Item {
             format!("{} · {}", self.group, self.name)
         }
     }
+
+    #[cfg(test)]
+    fn target_kind(&self) -> &'static str {
+        match self.target {
+            Target::Spawn { .. } => "spawn",
+            Target::Focus(_) => "focus",
+            Target::Confirm(_) => "confirm",
+            Target::Mode(_) => "mode",
+            Target::Info => "info",
+        }
+    }
+}
+
+/// An inline numeric edit for the idle/lock timing view.
+#[derive(Clone)]
+struct NumberEdit {
+    key: String,
+    label: String,
+    buffer: String,
 }
 
 struct Ui {
@@ -94,16 +117,17 @@ struct Ui {
     activate: Atom,
     /// True when the window was opened for a web search (`--search`).
     web_mode: bool,
-    /// The engines offered for the typed text.
-    sources: Vec<websearch::Source>,
-    /// How many items existed before the first web-search row was added.
+    /// The current view, so an ordered list can keep its intended order.
+    mode: String,
+    /// The effective providers: order, aliases and the configured default.
+    catalog: websearch::Catalog,
+    /// How many items existed before the mode added its own rows.
     plain_items: usize,
     /// The profile name while a layout is being saved, with the cursor.
     profile_name: Option<String>,
+    /// The minutes field while an idle/lock timing value is being edited.
+    number_edit: Option<NumberEdit>,
 }
-
-/// Shorter text filters apps; from here on it also searches the web.
-const MIN_SEARCH_CHARS: usize = 3;
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
     Ok(c.intern_atom(false, name.as_bytes())?.reply()?.atom)
@@ -163,6 +187,7 @@ fn microphone_items() -> Vec<Item> {
             group: "Audio".into(),
             name: name.into(),
             detail: detail.into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Spawn {
                 argv: ["niructl", "audio"]
@@ -197,6 +222,7 @@ fn microphone_items() -> Vec<Item> {
                         "Use this input"
                     }
                     .into(),
+                    keywords: String::new(),
                     favorite: false,
                     target: Target::Spawn {
                         argv: vec!["niructl".into(), "audio".into(), "source".into(), id.into()],
@@ -280,6 +306,7 @@ fn bluetooth_items() -> Vec<Item> {
             "Currently off"
         }
         .into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Spawn {
             argv: vec![
@@ -311,6 +338,7 @@ fn bluetooth_items() -> Vec<Item> {
             } else {
                 format!("Battery {battery}% · paired")
             },
+            keywords: String::new(),
             favorite: false,
             target: Target::Spawn {
                 argv: vec![
@@ -337,6 +365,7 @@ fn power_items() -> Vec<Item> {
             group: "Power".into(),
             name: "Power profiles unavailable".into(),
             detail: "niructl did not respond".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Info,
         }];
@@ -347,6 +376,7 @@ fn power_items() -> Vec<Item> {
             group: "Power".into(),
             name: "Power profiles unavailable".into(),
             detail: "power-profiles-daemon is not available".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Info,
         }];
@@ -377,6 +407,7 @@ fn power_items() -> Vec<Item> {
             } else {
                 format!("Use this profile · source {source}")
             },
+            keywords: String::new(),
             favorite: false,
             target: spawn_niructl(&["powerprofile", "set", profile]),
         });
@@ -387,6 +418,7 @@ fn power_items() -> Vec<Item> {
             group: "Power".into(),
             name: "No power profiles".into(),
             detail: "power-profiles-daemon reported no profiles".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Info,
         });
@@ -489,6 +521,7 @@ fn display_items() -> Vec<Item> {
                     group: "Displays".into(),
                     name: format!("Display: {}", fields[0]),
                     detail: format!("{} output(s) · preview with revert", fields[1]),
+                    keywords: String::new(),
                     favorite: false,
                     target: spawn_niructl(&["display", "preview", fields[0]]),
                 });
@@ -502,6 +535,7 @@ fn display_items() -> Vec<Item> {
         group: "Displays".into(),
         name: "Displays: Arrange side by side".into(),
         detail: "Preferred mode on every connected screen".into(),
+        keywords: String::new(),
         favorite: false,
         target: spawn_niructl(&["display", "auto"]),
     });
@@ -511,6 +545,7 @@ fn display_items() -> Vec<Item> {
         group: "Displays".into(),
         name: "Displays: Save this layout as a profile".into(),
         detail: "Type a name, then Enter".into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Info,
     });
@@ -530,6 +565,7 @@ fn display_items() -> Vec<Item> {
                         group: "Displays".into(),
                         name: format!("Displays: Turn {output_name} {rotation}"),
                         detail: format!("{} · keeps every other screen", fields[1]),
+                        keywords: String::new(),
                         favorite: false,
                         target: spawn_niructl(&["display", "rotate", output_name, rotation]),
                     });
@@ -545,6 +581,7 @@ fn display_items() -> Vec<Item> {
                 group: "Displays".into(),
                 name: "Keep display layout".into(),
                 detail: "Confirm the preview".into(),
+                keywords: String::new(),
                 favorite: false,
                 target: spawn_niructl(&["display", "keep"]),
             });
@@ -553,6 +590,7 @@ fn display_items() -> Vec<Item> {
                 group: "Displays".into(),
                 name: "Revert display layout".into(),
                 detail: "Return to the previous layout".into(),
+                keywords: String::new(),
                 favorite: false,
                 target: spawn_niructl(&["display", "revert"]),
             });
@@ -564,6 +602,7 @@ fn display_items() -> Vec<Item> {
             group: "Displays".into(),
             name: "No display profiles".into(),
             detail: "Create one with niructl display save NAME".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Info,
         });
@@ -577,6 +616,7 @@ fn bluetooth_info(name: &str, detail: &str) -> Item {
         group: "Bluetooth".into(),
         name: name.into(),
         detail: detail.into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Info,
     }
@@ -588,6 +628,7 @@ fn microphone_info(name: &str, detail: &str) -> Item {
         group: "Audio".into(),
         name: name.into(),
         detail: detail.into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Info,
     }
@@ -612,9 +653,11 @@ fn shortcut_action_label(action: &str) -> String {
         "terminal_alt" => "Alternative terminal",
         "browser" => "Browser",
         "launcher" => "Application launcher",
+        "launcher_search" => "Web search",
         "launcher_unified" => "Actions and layouts",
         "window_switcher" => "Window switcher",
         "lock" => "Lock screen",
+        "suspend" => "Lock and suspend",
         "reload" => "Reload",
         "nightlight_toggle" => "Night light",
         "dnd_toggle" => "Toggle DND",
@@ -628,8 +671,12 @@ fn shortcut_action_label(action: &str) -> String {
         "scratchpad" => "Scratchpad",
         "focus_next" => "Next window",
         "focus_prev" => "Previous window",
-        "move_next" => "Move window next",
-        "move_prev" => "Move window previous",
+        "move_next" | "swap_next" => "Swap with next window",
+        "move_prev" | "swap_prev" => "Swap with previous window",
+        "inc_master" => "Increase master count",
+        "dec_master" => "Decrease master count",
+        "inc_master_ratio" => "Increase master ratio",
+        "dec_master_ratio" => "Decrease master ratio",
         "focusmon -1" => "Previous monitor",
         "focusmon 1" => "Next monitor",
         "tagmon -1" => "Move to previous monitor",
@@ -670,6 +717,242 @@ fn shortcut_action_label(action: &str) -> String {
         }
     };
     name.into()
+}
+
+fn theme_items() -> Vec<Item> {
+    let niructl = |args: &[&str]| Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    };
+    [
+        "niru-noir",
+        "niru-nord",
+        "niru-satie",
+        "niru-carl-larsson",
+        "niru-forest-vigil",
+        "niru-blood-of-urdr",
+        "niru-root-and-stone",
+        "niru-blue-horizon",
+        "niru-the-norns",
+        "niru-winter-nights",
+    ]
+    .into_iter()
+    .map(|theme| Item {
+        key: format!("action:theme:{theme}"),
+        group: "Appearance".into(),
+        name: format!("Theme: {theme}"),
+        detail: "Apply across WM, bar, saver and lock".into(),
+        keywords: format!("theme appearance {theme}"),
+        favorite: false,
+        target: niructl(&["theme", theme]),
+    })
+    .collect()
+}
+
+/// The active shortcut catalogue, read from NIRUWM.
+///
+/// This includes user overrides and skips explicit unbinds; the launcher never
+/// invents a second truth that can drift from the window manager.
+fn shortcut_items() -> Vec<Item> {
+    let mut shortcuts: Vec<(String, Vec<String>)> = Vec::new();
+    if let Ok(out) = Command::new("niructl").arg("keys").output() {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let Some((key, action)) = line.split_once('\t') else {
+                    continue;
+                };
+                if key.is_empty() || action.is_empty() || action == "unbind" {
+                    continue;
+                }
+                let key = shortcut_key_label(key);
+                if let Some((_, keys)) = shortcuts.iter_mut().find(|(a, _)| a == action) {
+                    keys.push(key);
+                } else {
+                    shortcuts.push((action.to_string(), vec![key]));
+                }
+            }
+        }
+    }
+    let mut items: Vec<Item> = shortcuts
+        .into_iter()
+        .map(|(action, keys)| Item {
+            key: format!("shortcut:{action}"),
+            group: "Shortcuts".into(),
+            name: shortcut_action_label(&action),
+            detail: keys.join(" / "),
+            keywords: format!("keybinding shortcut {action}"),
+            favorite: false,
+            target: Target::Info,
+        })
+        .collect();
+    items.push(Item {
+        key: "shortcut:mouse".into(),
+        group: "Shortcuts".into(),
+        name: "Mouse move / resize".into(),
+        detail: "Super+left / right drag".into(),
+        keywords: "keybinding mouse pointer".into(),
+        favorite: false,
+        target: Target::Info,
+    });
+    if items.len() == 1 {
+        items.push(Item {
+            key: "shortcut:none".into(),
+            group: "Shortcuts".into(),
+            name: "Keybindings unavailable".into(),
+            detail: "niructl did not return the active bindings".into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
+    items
+}
+
+/// One place that opens the settings that already exist elsewhere.
+fn settings_items() -> Vec<Item> {
+    let mode = |name: &str| Target::Mode(name.to_string());
+    let mut items = vec![
+        Item {
+            key: "settings:themes".into(),
+            group: "NIRUX Settings".into(),
+            name: "Appearance and themes".into(),
+            detail: "Apply a theme across the desktop".into(),
+            keywords: "settings appearance theme colours".into(),
+            favorite: false,
+            target: mode("themes"),
+        },
+        Item {
+            key: "settings:displays".into(),
+            group: "NIRUX Settings".into(),
+            name: "Displays".into(),
+            detail: "Profiles, rotation and arrangement".into(),
+            keywords: "settings display screen monitor profile".into(),
+            favorite: false,
+            target: mode("displays"),
+        },
+        Item {
+            key: "settings:audio".into(),
+            group: "NIRUX Settings".into(),
+            name: "Audio".into(),
+            detail: "Outputs, microphone and mute".into(),
+            keywords: "settings sound audio microphone output".into(),
+            favorite: false,
+            target: mode("microphone"),
+        },
+        Item {
+            key: "settings:keys".into(),
+            group: "NIRUX Settings".into(),
+            name: "Keybindings".into(),
+            detail: "Every active shortcut".into(),
+            keywords: "settings keyboard keybindings shortcuts".into(),
+            favorite: false,
+            target: mode("keys"),
+        },
+        Item {
+            key: "settings:timing".into(),
+            group: "NIRUX Settings".into(),
+            name: "Idle and lock timing".into(),
+            detail: "Screen saver, lock and display off".into(),
+            keywords: "settings idle lock screensaver timing minutes".into(),
+            favorite: false,
+            target: mode("timing"),
+        },
+    ];
+    if in_path("niruwallpaper") {
+        items.insert(
+            1,
+            Item {
+                key: "settings:wallpaper".into(),
+                group: "NIRUX Settings".into(),
+                name: "Wallpaper".into(),
+                detail: "Image, scale, rotation and screen".into(),
+                keywords: "settings wallpaper background appearance".into(),
+                favorite: false,
+                target: Target::Spawn {
+                    argv: vec!["niruwallpaper".to_string()],
+                    terminal: false,
+                    path: None,
+                },
+            },
+        );
+    }
+    items
+}
+
+/// The effective idle, lock and display-off timers from `niructl timing`.
+fn timing_items() -> Vec<Item> {
+    let specs = [
+        (
+            "screensaver_timeout",
+            "Screen saver after",
+            "Idle minutes before the screen saver",
+        ),
+        (
+            "lock_after_screensaver",
+            "Lock after screen saver",
+            "Minutes the screen saver stays up before locking",
+        ),
+        (
+            "dpms_off_after_lock",
+            "Display off after lock",
+            "Minutes after locking before the display sleeps",
+        ),
+    ];
+    let mut values: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    match Command::new("niructl").args(["timing", "show"]).output() {
+        Ok(out) if out.status.success() => {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some((key, value)) = line.split_once('=') {
+                    values.insert(key.trim().to_string(), value.trim().to_string());
+                }
+            }
+        }
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return vec![Item {
+                key: "timing:unavailable".into(),
+                group: "Idle and lock".into(),
+                name: "Idle and lock timing unavailable".into(),
+                detail: if text.is_empty() {
+                    "niructl timing show failed".into()
+                } else {
+                    text
+                },
+                keywords: String::new(),
+                favorite: false,
+                target: Target::Info,
+            }];
+        }
+        Err(e) => {
+            return vec![Item {
+                key: "timing:unavailable".into(),
+                group: "Idle and lock".into(),
+                name: "Idle and lock timing unavailable".into(),
+                detail: format!("could not start niructl: {e}"),
+                keywords: String::new(),
+                favorite: false,
+                target: Target::Info,
+            }];
+        }
+    }
+    specs
+        .into_iter()
+        .map(|(key, label, detail)| {
+            let value = values.get(key).cloned().unwrap_or_else(|| "?".into());
+            Item {
+                key: format!("timing:{key}"),
+                group: "Idle and lock".into(),
+                name: label.into(),
+                detail: format!("{value} minutes · Enter to change"),
+                keywords: format!("timing idle lock {detail}"),
+                favorite: false,
+                target: Target::Info,
+            }
+        })
+        .collect()
 }
 
 fn action_items(cfg: &Config) -> Vec<Item> {
@@ -732,7 +1015,10 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         let rest: Vec<&str> = parts.collect();
         let mut argv = vec!["niructl".to_string(), first.to_string()];
         argv.extend(rest.into_iter().map(str::to_string));
-        let group = if matches!(first, "lock" | "screensaver" | "reload" | "dnd" | "idle") {
+        let group = if matches!(
+            first,
+            "lock" | "screensaver" | "reload" | "dnd" | "idle" | "suspend"
+        ) {
             "System"
         } else if first == "audio" {
             "Audio"
@@ -750,6 +1036,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             group: group.into(),
             name: name.into(),
             detail: detail.into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Spawn {
                 argv,
@@ -758,27 +1045,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             },
         });
     }
-    for theme in [
-        "niru-noir",
-        "niru-nord",
-        "niru-satie",
-        "niru-carl-larsson",
-        "niru-forest-vigil",
-        "niru-blood-of-urdr",
-        "niru-root-and-stone",
-        "niru-blue-horizon",
-        "niru-the-norns",
-        "niru-winter-nights",
-    ] {
-        items.push(Item {
-            key: format!("action:theme:{theme}"),
-            group: "Appearance".into(),
-            name: format!("Theme: {theme}"),
-            detail: "Apply across WM, bar, saver and lock".into(),
-            favorite: false,
-            target: niructl(&["theme", theme]),
-        });
-    }
+    items.extend(theme_items());
     // Choosing an image, the scale, rotation and theme following belong to
     // NIRU Wallpaper, which shows previews and the per-screen choice. The
     // launcher keeps the one entry that opens it instead of repeating a list
@@ -809,6 +1076,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                         } else {
                             "Use this device".into()
                         },
+                        keywords: String::new(),
                         favorite: false,
                         target: niructl(&["audio", kind.trim_end_matches('s'), id]),
                     });
@@ -817,45 +1085,8 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         }
     }
 
-    // Effective shortcut catalogue from NIRUWM. This includes user overrides
-    // and skips explicit unbinds; the launcher never invents a second truth.
-    let mut shortcuts: Vec<(String, Vec<String>)> = Vec::new();
-    if let Ok(out) = Command::new("niructl").arg("keys").output() {
-        if out.status.success() {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                let Some((key, action)) = line.split_once('\t') else {
-                    continue;
-                };
-                if key.is_empty() || action.is_empty() || action == "unbind" {
-                    continue;
-                }
-                let key = shortcut_key_label(key);
-                if let Some((_, keys)) = shortcuts.iter_mut().find(|(a, _)| a == action) {
-                    keys.push(key);
-                } else {
-                    shortcuts.push((action.to_string(), vec![key]));
-                }
-            }
-        }
-    }
-    for (action, keys) in shortcuts {
-        items.push(Item {
-            key: format!("shortcut:{action}"),
-            group: "Shortcuts".into(),
-            name: shortcut_action_label(&action),
-            detail: keys.join(" / "),
-            favorite: false,
-            target: Target::Info,
-        });
-    }
-    items.push(Item {
-        key: "shortcut:mouse".into(),
-        group: "Shortcuts".into(),
-        name: "Mouse move / resize".into(),
-        detail: "Super+left / right drag".into(),
-        favorite: false,
-        target: Target::Info,
-    });
+    items.extend(shortcut_items());
+    items.extend(settings_items());
     items.extend(microphone_items());
     items.extend(bluetooth_items());
     items.extend(display_items());
@@ -899,6 +1130,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                     } else {
                         detail.into()
                     },
+                    keywords: String::new(),
                     favorite: false,
                     target,
                 });
@@ -914,6 +1146,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             group: "System".into(),
             name: format!("Update NIRUX to {latest}"),
             detail: "Runs in a terminal · log out afterwards".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Spawn {
                 argv: vec!["nirux".into(), "update".into()],
@@ -927,6 +1160,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         group: "System".into(),
         name: "Run diagnostics".into(),
         detail: "Open the full NIRUX health report".into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Spawn {
             argv: vec!["nirux".into(), "doctor".into()],
@@ -954,6 +1188,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                     } else {
                         format!("{count} apps · {detail}")
                     },
+                    keywords: String::new(),
                     favorite: false,
                     target: niructl(&["recipe", "run", name]),
                 });
@@ -972,6 +1207,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             group: "Wallpaper".into(),
             name: "Wallpaper background and appearance: open settings".into(),
             detail: "NIRU Wallpaper: choose an image, scale, rotation and the screen".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Spawn {
                 argv: vec!["niruwallpaper".to_string()],
@@ -987,6 +1223,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             group: "Workspaces".into(),
             name: format!("Workspace {ws}"),
             detail: "Switch the focused monitor".into(),
+            keywords: String::new(),
             favorite: false,
             target: niructl(&["tag", &ws.to_string()]),
         });
@@ -996,6 +1233,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         group: "System".into(),
         name: "Update NIRUX suite…".into(),
         detail: "Run nirux update in a terminal".into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Spawn {
             argv: vec!["nirux".into(), "update".into()],
@@ -1008,6 +1246,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         group: "Appearance".into(),
         name: "Reset bar configuration…".into(),
         detail: "Restore current NIRUBAR defaults; a backup is kept".into(),
+        keywords: String::new(),
         favorite: false,
         target: Target::Confirm(Action::ResetBar),
     });
@@ -1021,6 +1260,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             group: "Power".into(),
             name: name.into(),
             detail: detail.into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Confirm(action),
         });
@@ -1036,6 +1276,7 @@ fn app_items(apps: Vec<desktop::App>) -> Vec<Item> {
             group: "Applications".into(),
             name: app.name,
             detail: app.id,
+            keywords: app.keywords.join(" "),
             favorite: false,
             target: Target::Spawn {
                 argv: app.argv,
@@ -1097,6 +1338,7 @@ fn window_items(c: &RustConnection, root: Window) -> Vec<Item> {
             group: "Windows".into(),
             name: title,
             detail: "Switch to this window".into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Focus(window),
         });
@@ -1198,6 +1440,56 @@ fn save_runtime_favorites(keys: &[String]) {
     let _ = std::fs::write(path, text);
 }
 
+/// True when every character of `needle` appears in `haystack` in order.
+fn subsequence(haystack: &str, needle: &str) -> bool {
+    let mut wanted = needle.chars();
+    let Some(mut next) = wanted.next() else {
+        return true;
+    };
+    for ch in haystack.chars() {
+        if ch == next {
+            match wanted.next() {
+                Some(ch) => next = ch,
+                None => return true,
+            }
+        }
+    }
+    false
+}
+
+/// How strongly one word matches an item; lower is better.
+///
+/// The order is deliberate: exact and prefix matches stay in front of a
+/// multiword hit, metadata comes after the visible name, and fuzzy matching is
+/// last so a typo never hides an obvious result.
+fn term_rank(
+    term: &str,
+    name: &str,
+    label: &str,
+    group: &str,
+    detail: &str,
+    keywords: &str,
+) -> Option<u8> {
+    if name == term {
+        Some(0)
+    } else if name.starts_with(term) || label.starts_with(term) {
+        Some(1)
+    } else if name
+        .split(|ch: char| !ch.is_alphanumeric())
+        .any(|word| word == term)
+    {
+        Some(2)
+    } else if name.contains(term) || label.contains(term) {
+        Some(3)
+    } else if keywords.contains(term) || group.contains(term) || detail.contains(term) {
+        Some(4)
+    } else if term.chars().count() >= 3 && (subsequence(name, term) || subsequence(label, term)) {
+        Some(5)
+    } else {
+        None
+    }
+}
+
 fn filtered(
     items: &[Item],
     query: &str,
@@ -1213,25 +1505,29 @@ fn filtered(
     favorites.truncate(5);
     let pinned: std::collections::HashSet<usize> = favorites.into_iter().collect();
     let q = query.trim().to_lowercase();
-    let mut hits: Vec<(bool, u8, String, usize)> = items
+    let terms: Vec<&str> = q.split_whitespace().collect();
+    let mut hits: Vec<(bool, u16, usize, String, usize)> = items
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
             let label = item.label().to_lowercase();
             let name = item.name.to_lowercase();
+            let group = item.group.to_lowercase();
             let detail = item.detail.to_lowercase();
-            let rank = if q.is_empty() || name == q || label == q {
+            let keywords = item.keywords.to_lowercase();
+            let rank = if terms.is_empty() {
                 0
-            } else if name.starts_with(&q) || label.starts_with(&q) {
-                1
-            } else if name.contains(&q) || label.contains(&q) {
-                2
-            } else if detail.contains(&q) {
-                3
             } else {
-                return None;
+                let mut total = 0u16;
+                for term in &terms {
+                    total += u16::from(term_rank(term, &name, &label, &group, &detail, &keywords)?);
+                }
+                total
             };
-            Some((!pinned.contains(&i), rank, label.clone(), i))
+            // A shorter label is a closer match only while searching; with an
+            // empty field the list stays alphabetical.
+            let length = if terms.is_empty() { 0 } else { label.len() };
+            Some((!pinned.contains(&i), rank, length, label.clone(), i))
         })
         .collect();
     hits.sort_by(|a, b| {
@@ -1239,8 +1535,53 @@ fn filtered(
             .then_with(|| a.1.cmp(&b.1))
             .then_with(|| a.2.cmp(&b.2))
             .then_with(|| a.3.cmp(&b.3))
+            .then_with(|| a.4.cmp(&b.4))
     });
-    hits.into_iter().map(|(_, _, _, i)| i).collect()
+    hits.into_iter().map(|(_, _, _, _, i)| i).collect()
+}
+
+/// The complete row list for the dedicated web-search mode.
+///
+/// Kept outside `Ui` so the empty, one-character, alias and address cases can
+/// be tested without opening an X connection.
+fn web_rows(query: &str, catalog: &websearch::Catalog) -> Vec<Item> {
+    let trimmed = query.trim();
+    if catalog.sources.is_empty() {
+        return vec![Item {
+            key: "search:none".into(),
+            group: "Search".into(),
+            name: "No search engines are configured".into(),
+            detail: "Add [[search.sources]] to ~/.config/nirulauncher/config.toml".into(),
+            keywords: String::new(),
+            favorite: false,
+            target: Target::Info,
+        }];
+    }
+    if trimmed.is_empty() {
+        return catalog
+            .sources
+            .iter()
+            .map(websearch::provider_item)
+            .collect();
+    }
+    // Keep a trailing space so `gh ` is an empty prefixed query and does not
+    // fall back to searching for the word "gh".
+    if let Some((source, rest)) = catalog.prefixed(query.trim_start()) {
+        if rest.is_empty() {
+            return vec![websearch::provider_item(source)];
+        }
+        return websearch::item(source, &rest).into_iter().collect();
+    }
+    let mut rows = Vec::new();
+    if let Some(url) = websearch::web_address(trimmed) {
+        rows.push(websearch::address_item(&url));
+    }
+    for source in &catalog.sources {
+        if let Some(item) = websearch::item(source, trimmed) {
+            rows.push(item);
+        }
+    }
+    rows
 }
 
 fn monitor_at(c: &RustConnection, root: Window, px: i16, py: i16) -> Rect {
@@ -1328,8 +1669,16 @@ impl Ui {
         } else if mode == "windows" {
             items.extend(window_items(&c, root));
         } else if mode == "search" {
-            // The address bar: typing opens the text in a search engine.
-            items.extend(app_items(apps));
+            // Dedicated web search: the provider rows are the whole list and
+            // are built from the query, including when it is empty.
+        } else if mode == "keys" {
+            items.extend(shortcut_items());
+        } else if mode == "settings" {
+            items.extend(settings_items());
+        } else if mode == "themes" {
+            items.extend(theme_items());
+        } else if mode == "timing" {
+            items.extend(timing_items());
         } else {
             items.extend(app_items(apps));
         }
@@ -1354,18 +1703,33 @@ impl Ui {
         for index in favorite_items.into_iter().skip(5) {
             items[index].favorite = false;
         }
-        if items.is_empty() {
+        if items.is_empty() && mode != "search" {
             return Err("no launchable applications or actions found".into());
         }
         let (px, py) = point(&c, root);
         let monitor = monitor_at(&c, root, px, py);
-        // The web-search row is added when text is typed, so the window is
-        // opened tall enough for it from the start instead of resizing later.
         let web_mode = mode == "search";
-        let sources = websearch::sources(&cfg.search_sources);
-        // One row per engine plus the local matches the window already has.
-        let search_slot = if web_mode { sources.len() } else { 0 };
-        let rows = (items.len() + search_slot).min(cfg.max_rows).max(1);
+        let catalog = websearch::catalog(
+            &cfg.search_sources,
+            &cfg.search_order,
+            cfg.search_default.as_deref(),
+            &cfg.search_aliases,
+        );
+        // The provider rows are built from the query, so the window is opened
+        // tall enough for all of them instead of resizing later.
+        let search_slot = if web_mode {
+            catalog.sources.len().saturating_add(1)
+        } else {
+            0
+        };
+        // Settings opens taller than its own short list so the views it
+        // switches to (Keybindings, Idle timing) are not shown in a five-row
+        // window; the launcher never resizes while it is open.
+        let rows = if mode == "settings" {
+            cfg.max_rows
+        } else {
+            (items.len() + search_slot).min(cfg.max_rows).max(1)
+        };
         let (_, line_height) = Renderer::measure(cfg.font_path.as_deref(), cfg.font_size)?;
         let row_height = cfg.row_height.max(line_height + 8);
         let padding = cfg.padding.max((line_height / 2).max(8));
@@ -1491,6 +1855,7 @@ impl Ui {
             renderer,
             plain_items: items.len(),
             profile_name: None,
+            number_edit: None,
             items,
             filtered,
             usage,
@@ -1507,8 +1872,10 @@ impl Ui {
             selection,
             activate,
             web_mode,
-            sources,
+            mode: mode.to_string(),
+            catalog,
         };
+        ui.refilter();
         ui.draw()?;
         Ok(ui)
     }
@@ -1530,15 +1897,35 @@ impl Ui {
             },
             pal.surface,
         )?;
-        let title = if let Some(name) = &self.profile_name {
+        let title = if self.number_edit.is_some() {
+            "Idle and lock timing"
+        } else if let Some(name) = &self.profile_name {
             let _ = name;
             "Name the layout profile"
         } else if self.confirm.is_some() {
             "Confirm"
         } else if self.web_mode {
             "Search the web"
+        } else if self.items.iter().all(|item| item.group == "Shortcuts") {
+            "Keybindings"
+        } else if self.items.iter().all(|item| item.group == "NIRUX Settings") {
+            "NIRUX Settings"
+        } else if self.items.iter().all(|item| item.group == "Appearance") {
+            "Themes"
+        } else if self
+            .items
+            .iter()
+            .any(|item| item.key.starts_with("timing:"))
+        {
+            "Idle and lock timing"
         } else if self.items.iter().all(|item| item.group == "Audio") {
             "Microphone controls"
+        } else if self.items.iter().all(|item| item.group == "Displays") {
+            "Displays"
+        } else if self.items.iter().all(|item| item.group == "Bluetooth") {
+            "Bluetooth"
+        } else if self.items.iter().all(|item| item.group == "Power") {
+            "Power"
         } else if self
             .items
             .iter()
@@ -1548,14 +1935,16 @@ impl Ui {
         } else {
             "Search applications"
         };
-        let query = if let Some(name) = &self.profile_name {
+        let query = if let Some(edit) = &self.number_edit {
+            format!("{}: {}", edit.label, edit.buffer)
+        } else if let Some(name) = &self.profile_name {
             format!("{title}: {name}")
         } else if self.query.is_empty() {
             title.to_string()
         } else {
             format!("{title}: {}", self.query)
         };
-        let colour = if self.query.is_empty() {
+        let colour = if self.query.is_empty() && self.number_edit.is_none() {
             pal.muted
         } else {
             pal.foreground
@@ -1637,10 +2026,26 @@ impl Ui {
                     Action::ResetBar => "reset the bar configuration",
                 }
             )
+        } else if self.number_edit.is_some() {
+            "Type minutes · Enter saves · Esc cancels".to_string()
         } else if self.profile_name.is_some() {
             "Enter saves the layout · Esc cancels".to_string()
         } else if !self.error.is_empty() {
             self.error.clone()
+        } else if self.web_mode {
+            "Enter opens search · Tab moves · Esc closes".to_string()
+        } else if self.mode == "keys" {
+            "Esc close · ↑↓ move · type to search".to_string()
+        } else if self.mode == "settings" {
+            "Enter opens · Esc close · ↑↓ move".to_string()
+        } else if self.mode == "themes" {
+            "Enter applies · Esc close · ↑↓ move".to_string()
+        } else if self
+            .items
+            .iter()
+            .any(|item| item.key.starts_with("timing:"))
+        {
+            "Enter changes a value · Esc close · ↑↓ move".to_string()
         } else {
             "Enter launch · Esc close · ↑↓ move · Ctrl+P favorite".to_string()
         };
@@ -1757,37 +2162,116 @@ impl Ui {
         self.draw()
     }
 
-    fn refilter(&mut self) {
-        // Drop the rows the previous keystroke built for the web search. They
-        // live after every real item, so removing the tail leaves app, action
-        // and favourite indices unchanged.
-        self.items.truncate(self.plain_items);
-        self.filtered = filtered(&self.items, &self.query, &self.usage);
-        self.error.clear();
-        // A web search belongs to a phrase, not to a short filter. From three
-        // characters on the engine rows join the list at the top, so Enter
-        // opens the first engine and the local matches stay one Tab away.
-        if self.web_mode && self.query.trim().chars().count() >= MIN_SEARCH_CHARS {
-            let mut rows = Vec::new();
-            for source in &self.sources {
-                if let Some(item) = websearch::item(source, &self.query) {
-                    rows.push(item);
+    /// Keys while an idle/lock timing value is being edited.
+    fn number_key(&mut self, key: u32) -> Result<()> {
+        let Some(mut edit) = self.number_edit.take() else {
+            return Ok(());
+        };
+        match key {
+            0xff1b => {
+                self.error.clear();
+            }
+            0xff0d | 0xff8d => {
+                let value = edit.buffer.trim().parse::<u32>();
+                match value {
+                    Ok(minutes) if minutes <= 24 * 60 => {
+                        let minutes_text = minutes.to_string();
+                        match Command::new("niructl")
+                            .args(["timing", "set", &edit.key, &minutes_text])
+                            .output()
+                        {
+                            Ok(out) if out.status.success() => {
+                                let key = format!("timing:{}", edit.key);
+                                if let Some(item) =
+                                    self.items.iter_mut().find(|item| item.key == key)
+                                {
+                                    item.detail = format!("{minutes} minutes · Enter to change");
+                                }
+                                self.error = format!("{} saved", edit.label);
+                            }
+                            Ok(out) => {
+                                let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                                self.error = if text.is_empty() {
+                                    "Could not save the timing".into()
+                                } else {
+                                    text
+                                };
+                                self.number_edit = Some(edit);
+                            }
+                            Err(e) => {
+                                self.error = format!("could not start niructl: {e}");
+                                self.number_edit = Some(edit);
+                            }
+                        }
+                    }
+                    _ => {
+                        self.error = "Enter a whole number of minutes (0-1440)".into();
+                        self.number_edit = Some(edit);
+                    }
                 }
             }
-            if rows.is_empty() {
-                self.error = "No search engine is configured; see the launcher README".into();
-            } else {
-                let start = self.items.len();
-                self.items.extend(rows);
-                self.filtered.splice(0..0, start..self.items.len());
-                self.error = "Enter opens the selected engine · Tab moves · Esc closes".to_string();
+            0xff08 => {
+                edit.buffer.pop();
+                self.number_edit = Some(edit);
             }
-        } else if self.web_mode && !self.query.trim().is_empty() {
-            self.error = format!("Type at least {MIN_SEARCH_CHARS} characters to search the web");
+            _ if (0x30..=0x39).contains(&key) => {
+                if edit.buffer.len() < 4 {
+                    if let Some(ch) = char::from_u32(key) {
+                        edit.buffer.push(ch);
+                    }
+                }
+                self.number_edit = Some(edit);
+            }
+            _ => self.number_edit = Some(edit),
+        }
+        self.draw()
+    }
+
+    /// The rows for the dedicated web-search mode.
+    fn web_items(&self) -> Vec<Item> {
+        web_rows(&self.query, &self.catalog)
+    }
+
+    fn refilter(&mut self) {
+        self.confirm = None;
+        self.error.clear();
+        if self.web_mode {
+            let previous = self
+                .filtered
+                .get(self.selected)
+                .map(|&index| self.items[index].key.clone());
+            self.items = self.web_items();
+            self.filtered = (0..self.items.len()).collect();
+            let remembered =
+                previous.and_then(|key| self.items.iter().position(|item| item.key == key));
+            let index = remembered.unwrap_or_else(|| {
+                if self.query.trim().is_empty() {
+                    self.catalog.default_index()
+                } else {
+                    0
+                }
+            });
+            self.selected = index.min(self.items.len().saturating_sub(1));
+            self.offset = 0;
+            if self.catalog.sources.is_empty() {
+                self.error = "No search engine is configured; see the launcher README".to_string();
+            } else if let Some((_, rest)) = self.catalog.prefixed(self.query.trim_start()) {
+                if rest.is_empty() {
+                    self.error = "Type a search phrase after the provider alias".to_string();
+                }
+            }
+            return;
+        }
+        self.items.truncate(self.plain_items);
+        if self.query.trim().is_empty() && matches!(self.mode.as_str(), "settings" | "timing") {
+            // These views have a deliberate order: appearance first, then the
+            // lock ladder. Alphabetical sorting would scramble both.
+            self.filtered = (0..self.items.len()).collect();
+        } else {
+            self.filtered = filtered(&self.items, &self.query, &self.usage);
         }
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
-        self.confirm = None;
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -1803,6 +2287,45 @@ impl Ui {
             self.offset = self.selected + 1 - self.rows;
         }
         self.confirm = None;
+    }
+
+    /// The rows a settings sub-view shows. These are built in-process so
+    /// choosing one swaps the open launcher instead of racing a second one.
+    fn mode_items(&self, mode: &str) -> Vec<Item> {
+        match mode {
+            "keys" => shortcut_items(),
+            "settings" => settings_items(),
+            "themes" => theme_items(),
+            "timing" => timing_items(),
+            "microphone" => microphone_items(),
+            "bluetooth" => bluetooth_items(),
+            "displays" => display_items(),
+            "power" => power_items(),
+            "windows" => window_items(&self.c, self.root),
+            _ => Vec::new(),
+        }
+    }
+
+    fn switch_mode(&mut self, mode: &str) -> Result<()> {
+        let items = self.mode_items(mode);
+        if items.is_empty() {
+            self.error = "Nothing to show in this view".into();
+            self.draw()?;
+            return Ok(());
+        }
+        self.items = items;
+        self.plain_items = self.items.len();
+        self.web_mode = false;
+        self.mode = mode.to_string();
+        self.query.clear();
+        self.number_edit = None;
+        self.profile_name = None;
+        self.confirm = None;
+        self.filtered = filtered(&self.items, "", &self.usage);
+        self.selected = 0;
+        self.offset = 0;
+        self.error.clear();
+        self.draw()
     }
 
     /// A link, opened with the same code path as every other spawn.
@@ -1839,6 +2362,10 @@ impl Ui {
                 }
                 self.confirm = Some(action);
                 self.draw()?;
+                Ok(true)
+            }
+            Target::Mode(mode) => {
+                self.switch_mode(&mode)?;
                 Ok(true)
             }
             Target::Info => Ok(true),
@@ -1878,11 +2405,36 @@ impl Ui {
     }
 
     fn activate(&mut self) -> Result<bool> {
+        if self.web_mode {
+            let trimmed = self.query.trim();
+            if trimmed.is_empty() {
+                self.error = "Type a search phrase".into();
+                self.draw()?;
+                return Ok(true);
+            }
+            if let Some((_, rest)) = self.catalog.prefixed(self.query.trim_start()) {
+                if rest.is_empty() {
+                    self.error = "Type a search phrase after the provider alias".into();
+                    self.draw()?;
+                    return Ok(true);
+                }
+            }
+        }
         let Some(index) = self.filtered.get(self.selected).copied() else {
             return Ok(true);
         };
-        let target = self.items[index].target.clone();
         let key = self.items[index].key.clone();
+        if let Some(name) = key.strip_prefix("timing:") {
+            self.number_edit = Some(NumberEdit {
+                key: name.to_string(),
+                label: self.items[index].name.clone(),
+                buffer: String::new(),
+            });
+            self.error.clear();
+            self.draw()?;
+            return Ok(true);
+        }
+        let target = self.items[index].target.clone();
         self.execute(&key, target)
     }
 
@@ -1913,6 +2465,10 @@ impl Ui {
                     // to the name and nothing else.
                     if self.profile_name.is_some() {
                         self.name_key(key)?;
+                        continue;
+                    }
+                    if self.number_edit.is_some() {
+                        self.number_key(key)?;
                         continue;
                     }
                     // A notice from the last action lasts until the next key,
@@ -2201,7 +2757,7 @@ fn main() {
             Err(e) => Err(e),
         },
         "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays"
-        | "--power" => {
+        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--windows" => "windows",
@@ -2209,6 +2765,10 @@ fn main() {
                 "--bluetooth" => "bluetooth",
                 "--displays" => "displays",
                 "--power" => "power",
+                "--keys" => "keys",
+                "--settings" => "settings",
+                "--themes" => "themes",
+                "--timing" => "timing",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -2218,7 +2778,7 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
@@ -2325,6 +2885,7 @@ mod input_tests {
             group: group.into(),
             name: name.into(),
             detail: String::new(),
+            keywords: String::new(),
             favorite: false,
             target: super::Target::Confirm(super::Action::Logout),
         }
@@ -2363,6 +2924,34 @@ mod input_tests {
                 && item.name == "Workspace 10"
         }));
         assert!(items.iter().any(|item| item.key == "action:reset-bar"));
+    }
+
+    #[test]
+    fn suspend_and_search_shortcuts_have_readable_names() {
+        assert_eq!(super::shortcut_action_label("suspend"), "Lock and suspend");
+        assert_eq!(
+            super::shortcut_action_label("launcher_search"),
+            "Web search"
+        );
+    }
+
+    #[test]
+    fn the_settings_group_holds_every_settings_view() {
+        let items = super::settings_items();
+        for key in [
+            "settings:themes",
+            "settings:displays",
+            "settings:audio",
+            "settings:keys",
+            "settings:timing",
+        ] {
+            let item = items
+                .iter()
+                .find(|item| item.key == key)
+                .unwrap_or_else(|| panic!("missing {key}"));
+            assert_eq!(item.group, "NIRUX Settings");
+            assert_eq!(item.target_kind(), "mode");
+        }
     }
 
     #[test]
@@ -2600,6 +3189,7 @@ mod search_tests {
             group: group.into(),
             name: name.into(),
             detail: detail.into(),
+            keywords: String::new(),
             favorite: false,
             target: Target::Info,
         }
@@ -2608,6 +3198,18 @@ mod search_tests {
     /// A row is found by its group name, because the group is part of what the
     /// list calls it. Several groups rely on this instead of repeating the
     /// word in every row's name.
+    #[test]
+    fn an_empty_query_stays_alphabetical_not_shortest_first() {
+        let items = vec![
+            row("Applications", "Zeta", "z.desktop"),
+            row("Applications", "Alpha", "a.desktop"),
+        ];
+        let usage = std::collections::HashMap::new();
+        let order = filtered(&items, "", &usage);
+        let names: Vec<&str> = order.iter().map(|&i| items[i].name.as_str()).collect();
+        assert_eq!(names, ["Alpha", "Zeta"]);
+    }
+
     #[test]
     fn a_row_is_found_by_its_group_name() {
         let items = vec![
@@ -2637,50 +3239,84 @@ mod search_tests {
         );
     }
 
-    /// Typing a phrase in `--search` puts the engine rows above the local
-    /// matches, and the first one is a complete, ready-to-open address.
+    /// The dedicated mode lists every provider before anything is typed, and
+    /// no applications at all.
     #[test]
-    fn a_phrase_offers_every_engine_at_the_top() {
-        // A local match that contains the phrase, so ranking and the engine
-        // rows are compared together.
-        let mut plain = vec![row("App", "black metal 1994 playlist", "music")];
-        let before = plain.len();
-        let sources = super::websearch::sources(&[]);
-        let phrase = "black metal 1994";
-        for source in &sources {
-            plain.push(super::websearch::item(source, phrase).expect("a row per engine"));
-        }
-        let usage = std::collections::HashMap::new();
-        let order = filtered(&plain, phrase, &usage);
-        // In the running launcher the engine rows are placed above the local
-        // hits whatever their rank; `filtered` sorts the local ones only.
-        let first_engine = &plain[order[0]];
-        assert_eq!(first_engine.name, "black metal 1994 playlist");
-        let first_engine = &plain[before];
-        assert_eq!(first_engine.name, "DuckDuckGo: black metal 1994");
-        match &first_engine.target {
-            Target::Spawn { argv, .. } => {
-                assert!(argv.last().unwrap().contains("black+metal+1994"));
-            }
-            _ => panic!("a search row must open a program"),
-        }
-        // Every engine got a row, and none of them hides a local match.
-        let engine_rows = plain[before..]
+    fn an_empty_search_lists_only_providers() {
+        let catalog = super::websearch::catalog(&[], &[], None, &[]);
+        let rows = super::web_rows("", &catalog);
+        assert_eq!(rows.len(), catalog.sources.len());
+        assert!(rows
             .iter()
-            .filter(|item| item.group == "Search")
-            .count();
-        assert_eq!(engine_rows, sources.len());
+            .all(|item| item.group == "Search" && item.target_kind() == "info"));
+        assert!(!rows.iter().any(|item| item.group == "Applications"));
     }
 
-    /// Three letters is the point where a filter becomes a search.
+    /// One character is a search; Swedish letters need no extra prefix.
     #[test]
-    fn short_text_is_not_a_web_search() {
-        assert_eq!(super::MIN_SEARCH_CHARS, 3);
-        let sources = super::websearch::sources(&[]);
-        let short = "ab";
-        assert!(sources
-            .iter()
-            .filter_map(|source| super::websearch::item(source, short))
-            .all(|item| item.name.ends_with("ab")));
+    fn one_character_and_swedish_letters_are_web_searches() {
+        let catalog = super::websearch::catalog(&[], &[], None, &[]);
+        for text in ["C", "R", "X", "å", "ö"] {
+            let rows = super::web_rows(text, &catalog);
+            assert_eq!(rows.len(), catalog.sources.len(), "{text}");
+            assert!(
+                rows.iter().all(|item| item.target_kind() == "spawn"),
+                "{text} must open an engine"
+            );
+            assert!(
+                rows.iter().all(|item| item.name.ends_with(text)),
+                "{text} must be in every row"
+            );
+        }
+    }
+
+    #[test]
+    fn an_address_is_the_first_row() {
+        let catalog = super::websearch::catalog(&[], &[], None, &[]);
+        let rows = super::web_rows("https://example.com/a?q=1", &catalog);
+        assert_eq!(rows[0].key, "search:address");
+        assert_eq!(rows[0].name, "Open address");
+        assert!(rows[1..].iter().all(|item| item.group == "Search"));
+    }
+
+    #[test]
+    fn an_alias_selects_one_provider_without_the_prefix() {
+        let catalog = super::websearch::catalog(&[], &[], None, &[]);
+        let rows = super::web_rows("gh niruwm", &catalog);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "GitHub: niruwm");
+        assert!(!rows[0].name.contains("gh "));
+    }
+
+    #[test]
+    fn an_empty_prefixed_query_does_not_execute() {
+        let catalog = super::websearch::catalog(&[], &[], None, &[]);
+        let rows = super::web_rows("gh ", &catalog);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target_kind(), "info");
+        assert_eq!(rows[0].name, "GitHub");
+    }
+
+    #[test]
+    fn a_provider_name_is_not_stolen_as_an_alias() {
+        let catalog = super::websearch::catalog(&[], &[], None, &[]);
+        let rows = super::web_rows("github niruwm", &catalog);
+        assert_eq!(
+            rows.len(),
+            catalog.sources.len(),
+            "a full name is an ordinary word"
+        );
+        assert!(rows.iter().all(|item| item.name.ends_with("github niruwm")));
+    }
+
+    #[test]
+    fn multiword_keyword_and_fuzzy_matching() {
+        let mut firefox = row("Applications", "Firefox", "firefox.desktop");
+        firefox.keywords = "web browser internet".into();
+        let items = vec![firefox, row("Applications", "Files", "files.desktop")];
+        let usage = std::collections::HashMap::new();
+        assert_eq!(filtered(&items, "web browser", &usage), vec![0]);
+        assert_eq!(filtered(&items, "firfox", &usage), vec![0]);
+        assert!(filtered(&items, "web files", &usage).is_empty());
     }
 }

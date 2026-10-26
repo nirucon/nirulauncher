@@ -1,9 +1,10 @@
 //! Web search from the launcher: one row per engine for the typed text.
 //!
-//! A source is an id, a label and a URL template with `{query}` in it. Adding
-//! one is a line in the built-in table or a `[[search.sources]]` entry in
-//! `~/.config/nirulauncher/config.toml`; nothing else has to change, so the
-//! list can grow without touching the keyboard handling or the rendering.
+//! A source is an id, a label, a URL template with `{query}` in it and an
+//! optional short alias. Adding one is a line in the built-in table or a
+//! `[[search.sources]]` entry in `~/.config/nirulauncher/config.toml`; nothing
+//! else has to change, so the list can grow without touching the keyboard
+//! handling or the rendering.
 //!
 //! The launcher never talks to the network itself. It opens an address in the
 //! browser, which keeps the query out of any log of its own and means a search
@@ -16,58 +17,117 @@ use std::collections::HashSet;
 ///
 /// `{query}` is replaced by the percent-encoded text; `{}` is accepted too.
 /// The order is the order the rows appear in, so the most common engines are
-/// first and one keystroke less away.
-pub const BUILTIN: &[(&str, &str, &str)] = &[
+/// first and one keystroke less away. The fourth field is a short alias for
+/// the `alias query` form; it is only used when followed by whitespace, so a
+/// normal word is never mistaken for a provider.
+pub const BUILTIN: &[(&str, &str, &str, &str)] = &[
     (
         "duckduckgo",
         "DuckDuckGo",
         "https://duckduckgo.com/?q={query}",
+        "ddg",
     ),
     (
         "brave",
         "Brave Search",
         "https://search.brave.com/search?q={query}",
+        "brave",
     ),
     (
         "google",
         "Google",
         "https://www.google.com/search?q={query}",
+        "g",
     ),
     (
         "wikipedia",
         "Wikipedia (English)",
         "https://en.wikipedia.org/w/index.php?search={query}",
+        "w",
+    ),
+    (
+        "wikipedia-sv",
+        "Wikipedia (Swedish)",
+        "https://sv.wikipedia.org/w/index.php?search={query}",
+        "wsv",
     ),
     (
         "youtube",
         "YouTube",
         "https://www.youtube.com/results?search_query={query}",
+        "yt",
     ),
-    ("chatgpt", "ChatGPT", "https://chatgpt.com/?q={query}"),
+    (
+        "github",
+        "GitHub",
+        "https://github.com/search?q={query}",
+        "gh",
+    ),
+    (
+        "archwiki",
+        "ArchWiki",
+        "https://wiki.archlinux.org/index.php?search={query}",
+        "aw",
+    ),
+    (
+        "crates",
+        "crates.io",
+        "https://crates.io/search?q={query}",
+        "crate",
+    ),
+    (
+        "docsrs",
+        "docs.rs",
+        "https://docs.rs/releases/search?query={query}",
+        "docs",
+    ),
+    (
+        "chatgpt",
+        "ChatGPT",
+        "https://chatgpt.com/?q={query}",
+        "gpt",
+    ),
     (
         "gemini",
         "Gemini",
         "https://gemini.google.com/app?q={query}",
+        "gem",
     ),
-    ("grok", "Grok", "https://grok.com/?q={query}"),
+    ("grok", "Grok", "https://grok.com/?q={query}", "grok"),
     (
         "copilot",
         "Microsoft Copilot",
         "https://copilot.microsoft.com/?q={query}&sendquery=1",
+        "cop",
+    ),
+    (
+        "discogs",
+        "Discogs",
+        "https://www.discogs.com/search/?q={query}",
+        "disc",
+    ),
+    (
+        "musicbrainz",
+        "MusicBrainz",
+        "https://musicbrainz.org/search?query={query}",
+        "mb",
     ),
     (
         "metal-archives",
         "Metal Archives",
         "https://www.metal-archives.com/search?searchString={query}&type=band_name",
+        "ma",
     ),
 ];
 
-/// One search provider: a stable id used in keys, a label, a URL template.
+/// One search provider: a stable id used in keys, a label, a URL template and
+/// the short alias that selects it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
     pub id: String,
     pub label: String,
     pub url: String,
+    pub alias: String,
 }
 
 impl Source {
@@ -111,6 +171,45 @@ impl Source {
     }
 }
 
+/// The engines with user additions, overrides, order and a default.
+#[derive(Clone, Debug, Default)]
+pub struct Catalog {
+    pub sources: Vec<Source>,
+    /// `(alias, source id)`, lower-case aliases, configuration wins.
+    pub aliases: Vec<(String, String)>,
+    /// The configured default id, when it names an enabled engine.
+    pub default: Option<String>,
+}
+
+impl Catalog {
+    /// The provider selected by a leading `alias ` prefix, with the rest of
+    /// the text. Only an alias followed by whitespace counts, so an ordinary
+    /// word, including a provider's full name, stays a normal query.
+    pub fn prefixed<'a>(&'a self, text: &'a str) -> Option<(&'a Source, String)> {
+        let (word, rest) = text.split_once(char::is_whitespace)?;
+        let alias = word.trim().to_lowercase();
+        if alias.is_empty() {
+            return None;
+        }
+        let id = self
+            .aliases
+            .iter()
+            .find(|(candidate, _)| candidate == &alias)
+            .map(|(_, id)| id)?;
+        let source = self.sources.iter().find(|source| &source.id == id)?;
+        Some((source, rest.trim().to_string()))
+    }
+
+    /// The row selected when the field is empty: the configured default, or
+    /// the first enabled engine.
+    pub fn default_index(&self) -> usize {
+        self.default
+            .as_deref()
+            .and_then(|id| self.sources.iter().position(|source| source.id == id))
+            .unwrap_or(0)
+    }
+}
+
 /// The built-in engines with any `[[search.sources]]` additions or overrides.
 ///
 /// An entry with the same id as a built-in replaces it in place, keeping the
@@ -120,10 +219,11 @@ impl Source {
 pub fn sources(extra: &[ConfigSource]) -> Vec<Source> {
     let mut list: Vec<Source> = BUILTIN
         .iter()
-        .map(|(id, label, url)| Source {
+        .map(|(id, label, url, alias)| Source {
             id: (*id).to_string(),
             label: (*label).to_string(),
             url: (*url).to_string(),
+            alias: (*alias).to_string(),
         })
         .collect();
     let mut removed: HashSet<String> = HashSet::new();
@@ -166,10 +266,23 @@ pub fn sources(extra: &[ConfigSource]) -> Vec<Source> {
             // No address: the entry can still label an engine, nothing more.
             continue;
         }
+        let alias = entry
+            .alias
+            .as_deref()
+            .map(str::trim)
+            .filter(|alias| !alias.is_empty() && !alias.contains(char::is_whitespace))
+            .map(str::to_lowercase)
+            .unwrap_or_else(|| {
+                list.iter()
+                    .find(|source| source.id == id)
+                    .map(|source| source.alias.clone())
+                    .unwrap_or_default()
+            });
         let source = Source {
             id: id.clone(),
             label,
             url,
+            alias,
         };
         list.retain(|existing| existing.id != id);
         // Keep a built-in's position so the familiar engines do not move when
@@ -177,13 +290,13 @@ pub fn sources(extra: &[ConfigSource]) -> Vec<Source> {
         // are still in the list, which is the insertion point.
         let earlier_builtins = BUILTIN
             .iter()
-            .position(|(builtin, _, _)| *builtin == id)
+            .position(|(builtin, _, _, _)| *builtin == id)
             .map(|position| {
                 list.iter()
                     .filter(|source| {
                         BUILTIN
                             .iter()
-                            .position(|(builtin, _, _)| *builtin == source.id)
+                            .position(|(builtin, _, _, _)| *builtin == source.id)
                             .is_some_and(|earlier| earlier < position)
                     })
                     .count()
@@ -197,12 +310,70 @@ pub fn sources(extra: &[ConfigSource]) -> Vec<Source> {
     list
 }
 
+/// The final provider order and aliases from the launcher configuration.
+///
+/// `order` names enabled ids; listed ids come first in that order, and the
+/// rest keep their built-in or append order. Unknown ids are ignored. An
+/// empty default falls back to the first enabled engine.
+pub fn catalog(
+    extra: &[ConfigSource],
+    order: &[String],
+    default: Option<&str>,
+    aliases: &[(String, String)],
+) -> Catalog {
+    let base = sources(extra);
+    let mut list: Vec<Source> = Vec::with_capacity(base.len());
+    for id in order {
+        let id = id.trim().to_lowercase();
+        if let Some(source) = base.iter().find(|source| source.id == id) {
+            if !list.iter().any(|existing| existing.id == source.id) {
+                list.push(source.clone());
+            }
+        }
+    }
+    for source in base {
+        if !list.iter().any(|existing| existing.id == source.id) {
+            list.push(source);
+        }
+    }
+
+    let mut alias_map: Vec<(String, String)> = Vec::new();
+    let mut set_alias = |alias: &str, id: &str| {
+        let alias = alias.trim().to_lowercase();
+        if alias.is_empty()
+            || alias.contains(char::is_whitespace)
+            || !list.iter().any(|source| source.id == id)
+        {
+            return;
+        }
+        alias_map.retain(|(existing, _)| existing != &alias);
+        alias_map.push((alias, id.to_string()));
+    };
+    for source in &list {
+        set_alias(&source.alias, &source.id);
+    }
+    // A configured alias overrides a built-in one with the same spelling.
+    for (alias, id) in aliases {
+        set_alias(alias, &id.trim().to_lowercase());
+    }
+
+    let default = default
+        .map(|id| id.trim().to_lowercase())
+        .filter(|id| list.iter().any(|source| &source.id == id));
+    Catalog {
+        sources: list,
+        aliases: alias_map,
+        default,
+    }
+}
+
 /// A `[[search.sources]]` entry as written in the configuration file.
 #[derive(Clone, Debug, Default)]
 pub struct ConfigSource {
     pub id: String,
     pub label: Option<String>,
     pub url: String,
+    pub alias: Option<String>,
     pub enabled: bool,
 }
 
@@ -235,6 +406,7 @@ pub fn item(source: &Source, query: &str) -> Option<crate::Item> {
         group: "Search".into(),
         name: format!("{}: {text}", source.label),
         detail: source.host(),
+        keywords: format!("{} {}", source.label, source.alias),
         favorite: false,
         target: Target::Spawn {
             argv: browser_command(&source.label, &url),
@@ -242,6 +414,59 @@ pub fn item(source: &Source, query: &str) -> Option<crate::Item> {
             path: None,
         },
     })
+}
+
+/// A provider row shown before anything has been typed. It never opens the
+/// browser; Enter on an empty field keeps the launcher open.
+pub fn provider_item(source: &Source) -> crate::Item {
+    crate::Item {
+        key: format!("search:{}", source.id),
+        group: "Search".into(),
+        name: source.label.clone(),
+        detail: source.host(),
+        keywords: source.alias.clone(),
+        favorite: false,
+        target: Target::Info,
+    }
+}
+
+/// A row that opens the typed address itself.
+pub fn address_item(url: &str) -> crate::Item {
+    crate::Item {
+        key: "search:address".into(),
+        group: String::new(),
+        name: "Open address".into(),
+        detail: url.to_string(),
+        keywords: "url link website".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: browser_command("Address", url),
+            terminal: false,
+            path: None,
+        },
+    }
+}
+
+/// The address itself when the text is an explicit HTTP(S) URL.
+///
+/// Only `http://` and `https://` are accepted: a search field must never turn
+/// `file:` or a bare command into a local action.
+pub fn web_address(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let rest = text
+        .strip_prefix("https://")
+        .or_else(|| text.strip_prefix("http://"))?;
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if host.is_empty() || host.starts_with(':') || host.starts_with('.') {
+        return None;
+    }
+    if !host.chars().any(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    Some(text.to_string())
 }
 
 /// How NIRUX opens a link.
@@ -307,12 +532,22 @@ fn niruwm_browser() -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn source(id: &str, alias: &str) -> Source {
+        Source {
+            id: id.into(),
+            label: id.into(),
+            url: format!("https://{id}.example/?q={{query}}"),
+            alias: alias.into(),
+        }
+    }
+
     #[test]
     fn a_builtin_engine_has_its_query() {
         let source = &Source {
             id: "duckduckgo".into(),
             label: "DuckDuckGo".into(),
             url: "https://duckduckgo.com/?q={query}".into(),
+            alias: "ddg".into(),
         };
         assert_eq!(
             source.url_for("black metal 1994").as_deref(),
@@ -358,6 +593,9 @@ mod tests {
     fn an_empty_query_has_no_row() {
         let sources = sources(&[]);
         assert!(item(&sources[0], "   ").is_none());
+        // The provider itself is still listed before anything is typed.
+        let row = provider_item(&sources[0]);
+        assert_eq!(row.target_kind(), "info");
     }
 
     #[test]
@@ -369,11 +607,14 @@ mod tests {
             "brave",
             "google",
             "wikipedia",
+            "wikipedia-sv",
             "youtube",
-            "chatgpt",
-            "gemini",
-            "grok",
-            "copilot",
+            "github",
+            "archwiki",
+            "crates",
+            "docsrs",
+            "discogs",
+            "musicbrainz",
             "metal-archives",
         ] {
             assert!(ids.contains(expected), "missing {expected}");
@@ -393,6 +634,7 @@ mod tests {
             id: "google".into(),
             label: Some("Google (no tracking)".into()),
             url: "https://www.google.com/search?q={query}&pws=0".into(),
+            alias: None,
             enabled: true,
         }]);
         assert_eq!(list.iter().position(|s| s.id == "google"), Some(2));
@@ -407,16 +649,19 @@ mod tests {
                 id: "searx".into(),
                 label: None,
                 url: "https://searx.example/search?q={query}".into(),
+                alias: Some("sx".into()),
                 enabled: true,
             },
             ConfigSource {
                 id: "grok".into(),
                 label: None,
                 url: String::new(),
+                alias: None,
                 enabled: false,
             },
         ]);
         assert_eq!(list.last().unwrap().label, "Searx");
+        assert_eq!(list.last().unwrap().alias, "sx");
         assert!(list.iter().all(|source| source.id != "grok"));
     }
 
@@ -426,6 +671,7 @@ mod tests {
             id: "plain".into(),
             label: "Plain".into(),
             url: "https://example.com/search".into(),
+            alias: String::new(),
         };
         assert_eq!(
             source.url_for("rust").as_deref(),
@@ -435,7 +681,79 @@ mod tests {
             id: "bad".into(),
             label: "Bad".into(),
             url: "file:///etc/passwd?q={query}".into(),
+            alias: String::new(),
         };
         assert!(unsafe_url.url_for("x").is_none());
+    }
+
+    #[test]
+    fn the_catalog_applies_order_and_default() {
+        let catalog = catalog(
+            &[],
+            &["github".into(), "duckduckgo".into()],
+            Some("github"),
+            &[],
+        );
+        assert_eq!(catalog.sources[0].id, "github");
+        assert_eq!(catalog.sources[1].id, "duckduckgo");
+        assert_eq!(catalog.default_index(), 0);
+    }
+
+    #[test]
+    fn a_missing_default_falls_back_to_the_first_engine() {
+        let catalog = catalog(&[], &[], Some("not-there"), &[]);
+        assert_eq!(catalog.default, None);
+        assert_eq!(catalog.default_index(), 0);
+    }
+
+    #[test]
+    fn aliases_need_whitespace_and_configuration_wins() {
+        let catalog = catalog(
+            &[],
+            &[],
+            None,
+            &[
+                ("gh".into(), "wikipedia".into()),
+                ("x".into(), "github".into()),
+            ],
+        );
+        let (source, rest) = catalog.prefixed("gh niruwm").unwrap();
+        assert_eq!(source.id, "wikipedia", "a configured alias overrides");
+        assert_eq!(rest, "niruwm");
+        assert!(catalog.prefixed("github niruwm").is_none());
+        assert!(catalog.prefixed("gh").is_none());
+        assert!(catalog.prefixed("ordinary words").is_none());
+        assert_eq!(catalog.prefixed("x  two words ").unwrap().1, "two words");
+    }
+
+    #[test]
+    fn only_explicit_http_addresses_are_addresses() {
+        assert_eq!(
+            web_address("https://example.com/a?q=1#x").as_deref(),
+            Some("https://example.com/a?q=1#x")
+        );
+        assert_eq!(
+            web_address("http://localhost:8080").as_deref(),
+            Some("http://localhost:8080")
+        );
+        for text in [
+            "example.com",
+            "file:///etc/passwd",
+            "https://",
+            "https:// two",
+            "javascript:alert(1)",
+        ] {
+            assert!(web_address(text).is_none(), "{text} is not an address");
+        }
+    }
+
+    #[test]
+    fn a_provider_row_without_a_query_is_inert() {
+        let row = provider_item(&source("github", "gh"));
+        assert_eq!(row.name, "github");
+        assert_eq!(row.detail, "github.example");
+        assert_eq!(row.target_kind(), "info");
+        let row = item(&source("github", "gh"), "x").unwrap();
+        assert_eq!(row.target_kind(), "spawn");
     }
 }

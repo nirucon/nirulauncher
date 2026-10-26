@@ -24,21 +24,26 @@ terminal = ["kitty"]
 # then $BROWSER, then xdg-open (the desktop's default browser).
 # browser = ["brave"]
 
-# Web search engines. Ten are built in and need no configuration:
-# duckduckgo, brave, google, wikipedia, youtube, chatgpt, gemini, grok,
-# copilot, metal-archives. `nirulauncher --list-search` prints their ids,
+# Web search engines, shown by Super+S. Every enabled engine is listed before
+# anything is typed, and the first character already searches. Seventeen are
+# built in and need no configuration:
+# duckduckgo, brave, google, wikipedia, wikipedia-sv, youtube, github,
+# archwiki, crates, docsrs, chatgpt, gemini, grok, copilot, discogs,
+# musicbrainz, metal-archives. `nirulauncher --list-search` prints their ids,
 # labels, templates and hosts.
 #
 # Add or override an engine with a `[[search.sources]]` entry. An id that
 # matches a built-in replaces it in place; a new id is appended. `{query}` is
 # replaced by the percent-encoded text (`{}` works too; a template with
 # neither gets `?q=` appended). Only http(s) addresses are opened, so a typo
-# cannot start a local program.
+# cannot start a local program. `alias` selects the engine with
+# "alias phrase" in the search field.
 #
 # [[search.sources]]
 # id = "searx"
 # label = "SearXNG (home)"
 # url = "https://searx.example/search?q={query}"
+# alias = "sx"
 #
 # [[search.sources]]
 # id = "google"
@@ -50,6 +55,18 @@ terminal = ["kitty"]
 # [[search.sources]]
 # id = "grok"
 # enabled = false
+
+# Search preferences. `order` lists the ids shown first; the rest keep their
+# built-in order. `default` is selected when the field is empty. `aliases`
+# overrides a built-in alias without redefining the engine.
+#
+# [search]
+# default = "duckduckgo"
+# order = ["duckduckgo", "github", "archwiki", "wikipedia"]
+# aliases = { gh = "github", aw = "archwiki", yt = "youtube" }
+
+# A typed http:// or https:// address is offered as "Open address" above the
+# engine rows. Enter on an empty field keeps the launcher open.
 
 # Desktop-file IDs or action names pinned above search rank.
 # favorites = ["firefox.desktop", "Lock screen"]

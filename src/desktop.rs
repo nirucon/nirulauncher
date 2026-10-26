@@ -9,6 +9,8 @@ use std::{
 pub struct App {
     pub id: String,
     pub name: String,
+    /// Extra words a person may search with: Keywords, GenericName, Comment.
+    pub keywords: Vec<String>,
     pub argv: Vec<String>,
     pub path: Option<PathBuf>,
     pub terminal: bool,
@@ -212,9 +214,21 @@ pub fn app_from_text(id: &str, text: &str) -> Option<App> {
     let path = (!path_value.is_empty() && Path::new(path_value).is_dir())
         .then(|| PathBuf::from(path_value));
     let argv = field_codes(raw, &name, icon, path_value);
+    let mut keywords = Vec::new();
+    for key in ["Keywords", "GenericName", "Comment"] {
+        if let Some(value) = values.get(key) {
+            for word in value.split([';', ',']) {
+                let word = word.trim();
+                if !word.is_empty() {
+                    keywords.push(word.to_string());
+                }
+            }
+        }
+    }
     Some(App {
         id: id.to_string(),
         name,
+        keywords,
         argv,
         path,
         terminal: bool_value(values.get("Terminal")),
@@ -271,13 +285,14 @@ pub fn matching(apps: &[App], query: &str) -> Vec<App> {
         .filter_map(|app| {
             let name = app.name.to_lowercase();
             let id = app.id.to_lowercase();
+            let keywords = app.keywords.join(" ").to_lowercase();
             let rank = if name == query || id == query {
                 0
             } else if name.starts_with(&query) {
                 1
             } else if name.contains(&query) {
                 2
-            } else if id.contains(&query) {
+            } else if keywords.contains(&query) || id.contains(&query) {
                 3
             } else {
                 return None;
@@ -321,6 +336,18 @@ mod tests {
     }
 
     #[test]
+    fn search_keywords_come_from_the_desktop_entry() {
+        let app = app_from_text(
+            "browser.desktop",
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox\nKeywords=web;browser;internet\nGenericName=Web Browser\nComment=Browse the web\n",
+        )
+        .unwrap();
+        assert!(app.keywords.iter().any(|word| word == "browser"));
+        assert!(app.keywords.iter().any(|word| word == "internet"));
+        assert!(app.keywords.iter().any(|word| word == "Web Browser"));
+    }
+
+    #[test]
     fn visibility_and_desktop_filters() {
         // The desktop name is read from the environment, so a developer machine
         // running Hyprland or GNOME would otherwise decide whether this passes.
@@ -348,6 +375,7 @@ mod tests {
         let mk = |name: &str| App {
             id: format!("{name}.desktop"),
             name: name.into(),
+            keywords: Vec::new(),
             argv: vec!["true".into()],
             path: None,
             terminal: false,
