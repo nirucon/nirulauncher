@@ -40,6 +40,7 @@ nirulauncher --keys               # active keybindings, including overrides
 nirulauncher --settings           # appearance, wallpaper, displays, audio, keys, timing
 nirulauncher --themes             # theme selection
 nirulauncher --timing             # idle, lock and display-off timers
+nirulauncher --input              # keyboard layout, repeat, pointer and touchpad
 nirulauncher --check-config
 ```
 

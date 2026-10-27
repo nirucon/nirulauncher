@@ -1216,6 +1216,15 @@ fn settings_items() -> Vec<Item> {
             target: mode("keys"),
         },
         Item {
+            key: "settings:input".into(),
+            group: "NIRUX Settings".into(),
+            name: "Input devices".into(),
+            detail: "Keyboard layout, repeat, touchpad and pointer".into(),
+            keywords: "settings input keyboard mouse touchpad pointer layout".into(),
+            favorite: false,
+            target: mode("input"),
+        },
+        Item {
             key: "settings:timing".into(),
             group: "NIRUX Settings".into(),
             name: "Idle and lock timing".into(),
@@ -1331,6 +1340,177 @@ fn timing_items() -> Vec<Item> {
             }
         })
         .collect()
+}
+
+fn input_items() -> Vec<Item> {
+    let out = match Command::new("niructl")
+        .args(["input", "status", "--json"])
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => {
+            return vec![Item {
+                key: "input:unavailable".into(),
+                group: "Input".into(),
+                name: "Input settings unavailable".into(),
+                detail: "niructl input is missing; run nirux update".into(),
+                keywords: "input keyboard mouse touchpad".into(),
+                favorite: false,
+                target: Target::Info,
+            }];
+        }
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
+        return Vec::new();
+    };
+    let layout = value["keyboard"]["layout"].as_str().unwrap_or("");
+    let delay = value["keyboard"]["repeat_delay"].as_u64().unwrap_or(0);
+    let rate = value["keyboard"]["repeat_rate"].as_u64().unwrap_or(0);
+    let natural = value["pointer"]["natural_scroll"].as_bool();
+    let tap = value["pointer"]["tap"].as_bool();
+    let speed = value["pointer"]["speed"].as_f64();
+    let xinput = value["xinput_available"].as_bool().unwrap_or(false);
+    let natural_supported = value["pointer_support"]["natural_scroll"]
+        .as_bool()
+        .unwrap_or(false);
+    let tap_supported = value["pointer_support"]["tap"].as_bool().unwrap_or(false);
+    let speed_supported = value["pointer_support"]["speed"].as_bool().unwrap_or(false);
+    let niructl = |args: &[&str]| Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    };
+    let mut items = Vec::new();
+    for candidate in ["se", "us", "gb", "de", "fr"] {
+        items.push(Item {
+            key: format!("input:layout:{candidate}"),
+            group: "Input".into(),
+            name: format!("Keyboard layout: {candidate}"),
+            detail: if layout == candidate {
+                "active".into()
+            } else if layout.is_empty() {
+                "system default is active".into()
+            } else {
+                "switch keyboard layout".into()
+            },
+            keywords: format!("input keyboard layout language {candidate}"),
+            favorite: false,
+            target: niructl(&["input", "set-keyboard", candidate]),
+        });
+    }
+    for (name, d, r) in [("Slow", 500, 25), ("Normal", 250, 40), ("Fast", 150, 60)] {
+        items.push(Item {
+            key: format!("input:repeat:{d}:{r}"),
+            group: "Input".into(),
+            name: format!("Keyboard repeat: {name}"),
+            detail: if delay == d && rate == r {
+                "active".into()
+            } else {
+                format!("{d} ms / {r} per second")
+            },
+            keywords: format!("input keyboard repeat delay rate {name}"),
+            favorite: false,
+            target: niructl(&["input", "set-repeat", &d.to_string(), &r.to_string()]),
+        });
+    }
+    if xinput && natural_supported {
+        items.push(Item {
+            key: "input:natural".into(),
+            group: "Input".into(),
+            name: format!(
+                "Natural scrolling: {}",
+                match natural {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "system",
+                }
+            ),
+            detail: "Mouse wheel and touchpad scrolling direction".into(),
+            keywords: "input pointer mouse touchpad natural scrolling".into(),
+            favorite: false,
+            target: niructl(&[
+                "input",
+                "set-pointer",
+                "natural",
+                if natural.unwrap_or(false) {
+                    "off"
+                } else {
+                    "on"
+                },
+            ]),
+        });
+    }
+    if xinput && tap_supported {
+        items.push(Item {
+            key: "input:tap".into(),
+            group: "Input".into(),
+            name: format!(
+                "Touchpad tap-to-click: {}",
+                match tap {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "system",
+                }
+            ),
+            detail: "Tap the touchpad instead of pressing it".into(),
+            keywords: "input pointer touchpad tap click".into(),
+            favorite: false,
+            target: niructl(&[
+                "input",
+                "set-pointer",
+                "tap",
+                if tap.unwrap_or(false) { "off" } else { "on" },
+            ]),
+        });
+    }
+    if xinput && speed_supported {
+        items.push(Item {
+            key: "input:speed".into(),
+            group: "Input".into(),
+            name: format!(
+                "Pointer speed: {}",
+                speed
+                    .map(|current| format!("{current:.2}"))
+                    .unwrap_or_else(|| "system".into())
+            ),
+            detail: "Click to cycle through -0.6 to 0.6".into(),
+            keywords: "input pointer mouse touchpad speed acceleration".into(),
+            favorite: false,
+            target: niructl(&["input", "cycle-speed"]),
+        });
+    } else if !xinput {
+        items.push(Item {
+            key: "input:pointer-unavailable".into(),
+            group: "Input".into(),
+            name: "Pointer settings unavailable".into(),
+            detail: "Install xinput with the next NIRUX update".into(),
+            keywords: "input pointer mouse touchpad unavailable".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    } else if !natural_supported && !tap_supported && !speed_supported {
+        items.push(Item {
+            key: "input:pointer-driver".into(),
+            group: "Input".into(),
+            name: "Pointer driver does not expose libinput settings".into(),
+            detail: "Keyboard settings still work; use the system input configuration".into(),
+            keywords: "input pointer mouse touchpad driver unsupported".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
+    items.push(Item {
+        key: "input:reset".into(),
+        group: "Input".into(),
+        name: "Reset input settings".into(),
+        detail: "Remove NIRU overrides; the system defaults remain".into(),
+        keywords: "input reset default keyboard pointer".into(),
+        favorite: false,
+        target: niructl(&["input", "reset"]),
+    });
+    items
 }
 
 fn action_items(cfg: &Config) -> Vec<Item> {
@@ -1465,6 +1645,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
 
     items.extend(shortcut_items());
     items.extend(settings_items());
+    items.extend(input_items());
     items.extend(microphone_items());
     items.extend(bluetooth_items());
     items.extend(display_items());
@@ -2229,6 +2410,8 @@ impl Ui {
             items.extend(theme_items());
         } else if mode == "timing" {
             items.extend(timing_items());
+        } else if mode == "input" {
+            items.extend(input_items());
         } else {
             items.extend(app_items(apps));
         }
@@ -2469,6 +2652,8 @@ impl Ui {
             "Keybindings"
         } else if self.items.iter().all(|item| item.group == "NIRUX Settings") {
             "NIRUX Settings"
+        } else if self.items.iter().all(|item| item.group == "Input") {
+            "Input devices"
         } else if self.items.iter().all(|item| item.group == "Appearance") {
             "Themes"
         } else if self
@@ -3168,6 +3353,7 @@ impl Ui {
             "settings" => settings_items(),
             "themes" => theme_items(),
             "timing" => timing_items(),
+            "input" => input_items(),
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
             "displays" => display_items(),
@@ -3666,7 +3852,7 @@ fn main() {
         }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
         | "--bluetooth" | "--displays" | "--power" | "--keys" | "--settings" | "--themes"
-        | "--timing" | "--wifi" => {
+        | "--timing" | "--input" | "--wifi" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -3679,6 +3865,7 @@ fn main() {
                 "--settings" => "settings",
                 "--themes" => "themes",
                 "--timing" => "timing",
+                "--input" => "input",
                 "--wifi" => "wifi",
                 _ => "apps",
             };
@@ -3689,7 +3876,7 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--wifi|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
