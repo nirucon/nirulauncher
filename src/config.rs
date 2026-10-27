@@ -313,6 +313,53 @@ fn appearance_spacing(appearance: &toml::Value, key: &str) -> Option<i16> {
         .and_then(|n| i16::try_from(n).ok())
 }
 
+/// Detect a high-DPI scale once at startup. An explicit `NIRU_UI_SCALE`
+/// overrides `Xft.dpi`; the result is bounded so a bad value cannot make the
+/// launcher unusable. `from_value` deliberately stays scale-free for tests.
+fn ui_scale() -> f32 {
+    let explicit = std::env::var("NIRU_UI_SCALE").ok();
+    let dpi = if explicit.is_none() {
+        std::process::Command::new("xrdb")
+            .args(["-query"])
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| {
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        (key.trim() == "Xft.dpi").then(|| value.trim().parse::<f32>().ok())?
+                    })
+            })
+    } else {
+        None
+    };
+    scale_from(explicit.as_deref(), dpi)
+}
+
+fn scale_from(explicit: Option<&str>, dpi: Option<f32>) -> f32 {
+    explicit
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .or_else(|| dpi.map(|dpi| dpi / 96.0))
+        .filter(|scale| scale.is_finite())
+        .map(|scale| scale.clamp(0.75, 2.5))
+        .unwrap_or(1.0)
+}
+
+fn apply_ui_scale(cfg: &mut Config) {
+    let scale = ui_scale();
+    if (scale - 1.0).abs() < 0.001 {
+        return;
+    }
+    cfg.width = (f32::from(cfg.width) * scale).round().clamp(320.0, 2000.0) as u16;
+    cfg.row_height = (f32::from(cfg.row_height) * scale)
+        .round()
+        .clamp(16.0, 80.0) as i16;
+    cfg.padding = (f32::from(cfg.padding) * scale).round().clamp(0.0, 80.0) as i16;
+    cfg.font_size = (cfg.font_size * scale).clamp(8.0, 40.0);
+}
+
 /// Read the suite appearance selection, then a user theme file, then built-ins.
 fn suite_palette_from(base: &Path) -> Palette {
     let Ok(config) = std::fs::read_to_string(base.join("niruwm/config.toml")) else {
@@ -391,14 +438,18 @@ impl Config {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let empty = toml::Value::Table(Default::default());
-                return Self::from_value(&empty);
+                let mut cfg = Self::from_value(&empty)?;
+                apply_ui_scale(&mut cfg);
+                return Ok(cfg);
             }
             Err(e) => return Err(format!("{}: {e}", path.display()).into()),
         };
         let value: toml::Value = text
             .parse()
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        Self::from_value(&value).map_err(|e| format!("{}: {e}", path.display()).into())
+        let mut cfg = Self::from_value(&value).map_err(|e| format!("{}: {e}", path.display()))?;
+        apply_ui_scale(&mut cfg);
+        Ok(cfg)
     }
 
     pub fn from_value(v: &toml::Value) -> Result<Self> {
@@ -510,6 +561,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_scale_prefers_the_explicit_value_and_clamps() {
+        assert_eq!(scale_from(Some("2.0"), Some(192.0)), 2.0);
+        assert_eq!(scale_from(None, Some(192.0)), 2.0);
+        assert_eq!(scale_from(None, Some(96.0)), 1.0);
+        assert_eq!(scale_from(Some("99"), None), 2.5);
+        assert_eq!(scale_from(Some("0.1"), None), 0.75);
+        assert_eq!(scale_from(Some("nonsense"), None), 1.0);
+    }
 
     #[test]
     fn invalid_sizes_are_rejected() {

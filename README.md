@@ -79,6 +79,34 @@ Missing OpenCode is shown as unavailable; it is never installed automatically.
 Deterministic storage/cache actions remain review-first and do not delete personal
 files.
 
+### Intent search and saved actions
+
+Typing an exact English or Swedish phrase in `--apps`, `--actions` or
+`--system-actions` adds up to three **Intent** rows above ordinary results. A
+phrase is only matched after case, whitespace and punctuation normalization; it
+never becomes a shell command and the typed text is never inserted into argv.
+Supported phrases include lock/lås, logout/logga ut, reboot/starta om,
+shutdown/stäng av, focus mode/fokusläge, presentation/mötesläge, stop
+context/avsluta läge, DND/stör ej, keep awake/håll vaken, volume and microphone
+mute, brightness, night light, compositor, off-screen window rescue and Wi-Fi
+radio on/off through NetworkManager (`nmcli`). Missing `nmcli` shows an
+unavailable info row instead of claiming success; all other actions use the same
+fixed argv as the action catalogue.
+
+At startup the launcher reads `Xft.dpi` and scales its width, row height,
+padding and font size for high-DPI displays. Set `NIRU_UI_SCALE=1` to disable
+detection or a value such as `1.25` to override it. The scale is bounded to
+0.75–2.5; the window is still clamped to the monitor, including 800x600.
+
+Actions saved with `niructl action save NAME -- ARGV...` appear under **Saved
+actions** in `--actions` and `--system-actions`, and are searchable in the
+default app view. A stored `favorite` is shown with the normal star and pin
+behaviour. Press Ctrl+S on an app or command row to save its name and argv
+through `niructl`; an existing name gets a short numeric suffix instead of being
+overwritten. Confirmation, view-switch, info and window rows are not saved, and a
+missing or older `niructl` shows a clear unavailable message. Only the argv is
+stored, never a transcript or password.
+
 ### Wi-Fi
 
 `--wifi` is the Wi-Fi selector. It is also opened by the bar's Wi-Fi segment and

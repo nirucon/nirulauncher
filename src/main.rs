@@ -6,15 +6,19 @@
 
 mod config;
 mod desktop;
+mod intent;
 mod render;
+mod saved;
 mod websearch;
 mod wifi;
 
 use config::Config;
 use render::Renderer;
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
 use x11rb::{
     connection::Connection,
     protocol::{randr::ConnectionExt as _, xproto::*, Event},
@@ -756,6 +760,250 @@ fn spawn_niructl(args: &[&str]) -> Target {
         terminal: false,
         path: None,
     }
+}
+
+/// Run `niructl action list --json` with a bounded wait and bounded output.
+/// The error string explains why the helper could not provide a list; normal
+/// loading ignores it so an older or missing helper simply yields no rows.
+fn load_saved_actions_result() -> std::result::Result<Vec<saved::SavedAction>, String> {
+    let mut child = match Command::new("niructl")
+        .args(["action", "list", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("niructl was not found".into());
+        }
+        Err(error) => return Err(format!("could not start niructl: {error}")),
+    };
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    let mut timed_out = false;
+    let mut success = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                success = status.success();
+                break;
+            }
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                timed_out = true;
+                let _ = child.kill();
+                break;
+            }
+        }
+    }
+    let mut bytes = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let _ = stdout
+            .take(saved::MAX_JSON_BYTES as u64 + 1)
+            .read_to_end(&mut bytes);
+    }
+    let _ = child.wait();
+    if timed_out {
+        return Err("niructl action list timed out".into());
+    }
+    if !success {
+        return Err("this niructl has no working action command".into());
+    }
+    Ok(saved::parse(&bytes))
+}
+
+fn load_saved_actions() -> Vec<saved::SavedAction> {
+    load_saved_actions_result().unwrap_or_default()
+}
+
+fn saved_action_item(action: saved::SavedAction) -> Item {
+    let command = action
+        .command
+        .iter()
+        .map(|arg| {
+            arg.chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Item {
+        key: format!("saved:action:{}", action.name.to_lowercase()),
+        group: "Saved actions".into(),
+        name: action.name,
+        detail: format!("Saved command · {command}"),
+        keywords: "saved action command".into(),
+        favorite: action.favorite,
+        target: Target::Spawn {
+            argv: action.command,
+            terminal: false,
+            path: None,
+        },
+    }
+}
+
+/// Append saved rows without taking over an existing key.
+fn append_saved_actions(items: &mut Vec<Item>, actions: &[saved::SavedAction]) {
+    let mut keys: std::collections::HashSet<String> =
+        items.iter().map(|item| item.key.clone()).collect();
+    for action in actions {
+        let item = saved_action_item(action.clone());
+        if keys.insert(item.key.clone()) {
+            items.push(item);
+        }
+    }
+}
+
+fn intent_terminal(args: &[&str]) -> Target {
+    Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|arg| (*arg).to_string()))
+            .collect(),
+        terminal: true,
+        path: None,
+    }
+}
+
+fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
+    use intent::IntentAction as I;
+    let (name, detail, target) = match found.action {
+        I::Lock => (
+            "Lock screen",
+            "Lock now · niructl lock",
+            spawn_niructl(&["lock"]),
+        ),
+        I::Logout => (
+            "Log out",
+            "Log out of this session · confirmation required",
+            Target::Confirm(Action::Logout),
+        ),
+        I::Reboot => (
+            "Restart computer",
+            "Reboot now · confirmation required",
+            Target::Confirm(Action::Reboot),
+        ),
+        I::Shutdown => (
+            "Shut down",
+            "Power off now · confirmation required",
+            Target::Confirm(Action::Shutdown),
+        ),
+        I::FocusMode => (
+            "Focus mode for 60 minutes",
+            "DND and keep-awake · niructl mode focus 60",
+            intent_terminal(&["mode", "focus", "60"]),
+        ),
+        I::PresentationMode => (
+            "Presentation mode for 60 minutes",
+            "DND and keep-awake · niructl mode presentation 60",
+            intent_terminal(&["mode", "presentation", "60"]),
+        ),
+        I::StopContext => (
+            "Stop work context",
+            "Restore DND and idle state · niructl mode stop",
+            spawn_niructl(&["mode", "stop"]),
+        ),
+        I::Dnd => (
+            "Toggle notifications",
+            "Pause or resume DND · niructl dnd toggle",
+            spawn_niructl(&["dnd", "toggle"]),
+        ),
+        I::KeepAwake => (
+            "Toggle keep-awake",
+            "Inhibit idle lock and DPMS · niructl idle toggle",
+            spawn_niructl(&["idle", "toggle"]),
+        ),
+        I::VolumeUp => (
+            "Volume up",
+            "Raise output volume by 5% · niructl audio volume up",
+            spawn_niructl(&["audio", "volume", "up"]),
+        ),
+        I::VolumeDown => (
+            "Volume down",
+            "Lower output volume by 5% · niructl audio volume down",
+            spawn_niructl(&["audio", "volume", "down"]),
+        ),
+        I::VolumeMute => (
+            "Mute audio",
+            "Toggle the default output · niructl audio mute",
+            spawn_niructl(&["audio", "mute"]),
+        ),
+        I::MicMute => (
+            "Mute microphone",
+            "Toggle input mute · niructl audio mic-mute toggle",
+            spawn_niructl(&["audio", "mic-mute", "toggle"]),
+        ),
+        I::BrightnessUp => (
+            "Brightness up",
+            "Increase the backlight by 5% · niructl brightness up",
+            spawn_niructl(&["brightness", "up"]),
+        ),
+        I::BrightnessDown => (
+            "Brightness down",
+            "Decrease the backlight by 5% · niructl brightness down",
+            spawn_niructl(&["brightness", "down"]),
+        ),
+        I::NightLight => (
+            "Night light",
+            "Toggle the manual night light · niructl nightlight toggle",
+            spawn_niructl(&["nightlight", "toggle"]),
+        ),
+        I::Compositor => (
+            "Compositor",
+            "Toggle picom transparency and shadows · niructl compositor toggle",
+            spawn_niructl(&["compositor", "toggle"]),
+        ),
+        I::WindowsRescue => (
+            "Bring off-screen windows back",
+            "Move managed windows onto a connected display · niructl windows rescue",
+            intent_terminal(&["windows", "rescue"]),
+        ),
+        I::WifiOn if nmcli => (
+            "Turn Wi-Fi on",
+            "NetworkManager radio · nmcli radio wifi on",
+            Target::Spawn {
+                argv: vec!["nmcli".into(), "radio".into(), "wifi".into(), "on".into()],
+                terminal: false,
+                path: None,
+            },
+        ),
+        I::WifiOff if nmcli => (
+            "Turn Wi-Fi off",
+            "NetworkManager radio · nmcli radio wifi off",
+            Target::Spawn {
+                argv: vec!["nmcli".into(), "radio".into(), "wifi".into(), "off".into()],
+                terminal: false,
+                path: None,
+            },
+        ),
+        I::WifiOn | I::WifiOff => (
+            if found.action == I::WifiOn {
+                "Turn Wi-Fi on"
+            } else {
+                "Turn Wi-Fi off"
+            },
+            "Unavailable · NetworkManager's nmcli was not found",
+            Target::Info,
+        ),
+    };
+    Item {
+        key: format!("intent:{}", found.action.id()),
+        group: "Intent".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: format!("intent {}", found.phrase),
+        favorite: false,
+        target,
+    }
+}
+
+fn intent_items(query: &str) -> Vec<Item> {
+    let nmcli = in_path("nmcli");
+    intent::resolve(query)
+        .into_iter()
+        .map(|found| intent_item(&found, nmcli))
+        .collect()
 }
 
 fn display_items() -> Vec<Item> {
@@ -2232,20 +2480,21 @@ fn system_action_priority(group: &str) -> u8 {
     match group {
         "NIRU Actions" => 0,
         "Work contexts" => 1,
-        "Diagnostics" => 2,
-        "System" => 3,
-        "Audio" => 4,
-        "Display" => 5,
-        "Layouts" => 6,
-        "Appearance" => 7,
-        "Settings" | "NIRUX Settings" => 8,
-        "Recipes" => 9,
-        "Power" => 10,
-        "Shortcuts" => 11,
-        "Themes" => 12,
-        "Wallpaper" => 13,
-        "Workspaces" => 14,
-        _ => 15,
+        "Saved actions" => 2,
+        "Diagnostics" => 3,
+        "System" => 4,
+        "Audio" => 5,
+        "Display" => 6,
+        "Layouts" => 7,
+        "Appearance" => 8,
+        "Settings" | "NIRUX Settings" => 9,
+        "Recipes" => 10,
+        "Power" => 11,
+        "Shortcuts" => 12,
+        "Themes" => 13,
+        "Wallpaper" => 14,
+        "Workspaces" => 15,
+        _ => 16,
     }
 }
 
@@ -2267,6 +2516,17 @@ fn filtered_for_mode(
     } else {
         filtered(items, query, usage)
     }
+}
+
+/// Place the intent rows (appended after the plain rows) before every ordinary
+/// search result.
+fn intent_first_order(base_len: usize, intent_count: usize, base_order: Vec<usize>) -> Vec<usize> {
+    if intent_count == 0 {
+        return base_order;
+    }
+    (base_len..base_len + intent_count)
+        .chain(base_order)
+        .collect()
 }
 
 /// The complete row list for the dedicated web-search mode.
@@ -2382,13 +2642,20 @@ impl Ui {
         let apps = desktop::discover();
         let (c, screen) = x11rb::connect(None)?;
         let root = c.setup().roots[screen].root;
+        let saved_actions = if matches!(mode, "actions" | "system-actions" | "apps") {
+            load_saved_actions()
+        } else {
+            Vec::new()
+        };
         let mut items = Vec::new();
         if mode == "actions" {
             items.extend(action_items(&cfg));
+            append_saved_actions(&mut items, &saved_actions);
             items.extend(window_items(&c, root));
             items.extend(app_items(apps));
         } else if mode == "system-actions" {
             items.extend(action_items(&cfg));
+            append_saved_actions(&mut items, &saved_actions);
         } else if mode == "microphone" {
             items.extend(microphone_items());
         } else if mode == "bluetooth" {
@@ -2414,6 +2681,7 @@ impl Ui {
             items.extend(input_items());
         } else {
             items.extend(app_items(apps));
+            append_saved_actions(&mut items, &saved_actions);
         }
         let runtime_favorites = load_runtime_favorites();
         let removed_favorites = load_removed_favorites();
@@ -2423,7 +2691,9 @@ impl Ui {
                     || favorite.eq_ignore_ascii_case(&item.name)
                     || favorite == &item.label()
             });
-            item.favorite = (configured || runtime_favorites.iter().any(|key| key == &item.key))
+            item.favorite = (item.favorite
+                || configured
+                || runtime_favorites.iter().any(|key| key == &item.key))
                 && !removed_favorites.iter().any(|key| key == &item.key);
         }
         let mut favorite_items: Vec<usize> = items
@@ -2822,7 +3092,7 @@ impl Ui {
         {
             "Enter changes a value · Esc close · ↑↓ move".to_string()
         } else {
-            "Enter launch · Esc close · ↑↓ move · Ctrl+P favorite".to_string()
+            "Enter launch · Esc close · ↑↓ move · Ctrl+P favorite · Ctrl+S save action".to_string()
         };
         let footer_colour = if self.confirm.is_some() {
             pal.warning
@@ -3119,6 +3389,67 @@ impl Ui {
         self.draw()
     }
 
+    /// Save the selected command row as a persistent action. The launcher only
+    /// writes through `niructl action save`; it never edits actions.toml.
+    fn save_selected_action(&mut self) -> Result<()> {
+        let Some(&index) = self.filtered.get(self.selected) else {
+            self.error = "Select an app or command row to save".into();
+            self.draw()?;
+            return Ok(());
+        };
+        let name = self.items[index].name.clone();
+        let argv = match savable_argv(&self.items[index].target) {
+            Ok(argv) => argv.to_vec(),
+            Err(message) => {
+                self.error = message.into();
+                self.draw()?;
+                return Ok(());
+            }
+        };
+        let existing = match load_saved_actions_result() {
+            Ok(existing) => existing,
+            Err(reason) => {
+                self.error = format!("Saving actions is unavailable: {reason}");
+                self.draw()?;
+                return Ok(());
+            }
+        };
+        let saved_name = saved::unique_name(&name, existing.iter().map(|item| item.name.as_str()));
+        let output = Command::new("niructl")
+            .args(["action", "save", &saved_name, "--"])
+            .args(&argv)
+            .stdin(Stdio::null())
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                self.error = format!("Saved action: {saved_name}");
+            }
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let lower = text.to_lowercase();
+                self.error = if lower.contains("unknown command")
+                    || lower.contains("unknown subcommand")
+                    || lower.contains("unrecognized subcommand")
+                    || lower.contains("invalid subcommand")
+                {
+                    "Saving actions is unavailable: this niructl has no action command".into()
+                } else if text.is_empty() {
+                    format!("Could not save action: {saved_name}")
+                } else {
+                    format!("Could not save action: {text}")
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.error = "Saving actions is unavailable: niructl was not found".into();
+            }
+            Err(error) => {
+                self.error = format!("Could not start niructl: {error}");
+            }
+        }
+        self.draw()?;
+        Ok(())
+    }
+
     fn toggle_favorite(&mut self) -> Result<()> {
         let Some(&index) = self.filtered.get(self.selected) else {
             return Ok(());
@@ -3312,15 +3643,26 @@ impl Ui {
             return;
         }
         self.items.truncate(self.plain_items);
-        if self.query.trim().is_empty()
+        let intent_rows = if matches!(self.mode.as_str(), "apps" | "actions" | "system-actions")
+            && !self.query.trim().is_empty()
+        {
+            intent_items(&self.query)
+        } else {
+            Vec::new()
+        };
+        let base_order = if self.query.trim().is_empty()
             && matches!(self.mode.as_str(), "settings" | "timing" | "wifi")
         {
             // These views have a deliberate order: appearance first, then the
             // lock ladder. Alphabetical sorting would scramble both.
-            self.filtered = (0..self.items.len()).collect();
+            (0..self.items.len()).collect()
         } else {
-            self.filtered = filtered_for_mode(&self.items, &self.query, &self.usage, &self.mode);
-        }
+            filtered_for_mode(&self.items, &self.query, &self.usage, &self.mode)
+        };
+        let first = self.items.len();
+        let count = intent_rows.len();
+        self.items.extend(intent_rows);
+        self.filtered = intent_first_order(first, count, base_order);
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
     }
@@ -3565,6 +3907,10 @@ impl Ui {
                         self.toggle_favorite()?;
                         continue;
                     }
+                    if e.state.contains(KeyButMask::CONTROL) && key == 0x73 {
+                        self.save_selected_action()?;
+                        continue;
+                    }
                     let handled = match key {
                         0xff1b => {
                             if self.confirm.take().is_some() {
@@ -3683,6 +4029,18 @@ fn truncate(text: &str, max_chars: i16) -> String {
         return "…".into();
     }
     text.chars().take(max_chars - 1).collect::<String>() + "…"
+}
+
+/// Only a non-empty spawn row can become a saved action.
+fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str> {
+    match target {
+        Target::Spawn { argv, .. } if !argv.is_empty() => Ok(argv),
+        Target::Spawn { .. } => Err("This row has no command to save"),
+        Target::Confirm(_) => Err("Confirmation actions are built in and cannot be saved"),
+        Target::Mode(_) => Err("View switches cannot be saved as actions"),
+        Target::Info => Err("Info rows cannot be saved as actions"),
+        Target::Focus(_) => Err("Window switches cannot be saved as actions"),
+    }
 }
 
 fn spawn_command(
@@ -4584,5 +4942,90 @@ mod search_tests {
         assert_eq!(filtered(&items, "web browser", &usage), vec![0]);
         assert_eq!(filtered(&items, "firfox", &usage), vec![0]);
         assert!(filtered(&items, "web files", &usage).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod intent_launcher_tests {
+    use super::{
+        intent, intent_first_order, intent_item, intent_items, savable_argv, Action, Target,
+    };
+
+    #[test]
+    fn intent_rows_rank_before_ordinary_results_and_empty_keeps_order() {
+        assert_eq!(intent_first_order(2, 2, vec![1, 0]), vec![2, 3, 1, 0]);
+        assert_eq!(intent_first_order(2, 0, vec![1, 0]), vec![1, 0]);
+    }
+
+    fn spawn(argv: &[&str]) -> Target {
+        Target::Spawn {
+            argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
+            terminal: false,
+            path: None,
+        }
+    }
+
+    #[test]
+    fn strong_phrases_resolve_to_fixed_commands() {
+        let rows = intent_items("volume up");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].group, "Intent");
+        assert_eq!(rows[0].name, "Volume up");
+        match &rows[0].target {
+            Target::Spawn { argv, .. } => {
+                assert_eq!(argv, &["niructl", "audio", "volume", "up"]);
+                assert!(!argv.iter().any(|arg| arg.contains("volume up")));
+            }
+            _ => panic!("volume up must be a spawn"),
+        }
+
+        let rows = intent_items("starta om");
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0].target, Target::Confirm(Action::Reboot)));
+        assert!(rows[0].detail.contains("confirmation"));
+    }
+
+    #[test]
+    fn unavailable_wifi_is_info_and_available_wifi_uses_networkmanager() {
+        let on = intent::IntentMatch {
+            action: intent::IntentAction::WifiOn,
+            phrase: "wifi on",
+        };
+        let unavailable = intent_item(&on, false);
+        assert!(matches!(unavailable.target, Target::Info));
+        assert!(unavailable.detail.contains("Unavailable"));
+
+        let available = intent_item(&on, true);
+        match &available.target {
+            Target::Spawn { argv, .. } => {
+                assert_eq!(argv, &["nmcli", "radio", "wifi", "on"]);
+            }
+            _ => panic!("available Wi-Fi must use nmcli"),
+        }
+    }
+
+    #[test]
+    fn hostile_text_does_not_become_an_intent_or_argv() {
+        for query in [
+            "lock; touch /tmp/pwned",
+            "$(reboot)",
+            "volume up && id",
+            &"lås ".repeat(200),
+        ] {
+            assert!(intent_items(query).is_empty(), "{query:?}");
+        }
+    }
+
+    #[test]
+    fn only_non_empty_spawn_rows_can_be_saved() {
+        assert_eq!(
+            savable_argv(&spawn(&["echo", "ok"])).unwrap(),
+            ["echo", "ok"]
+        );
+        assert!(savable_argv(&spawn(&[])).is_err());
+        assert!(savable_argv(&Target::Confirm(Action::Logout)).is_err());
+        assert!(savable_argv(&Target::Mode("settings".into())).is_err());
+        assert!(savable_argv(&Target::Info).is_err());
+        assert!(savable_argv(&Target::Focus(0)).is_err());
     }
 }
