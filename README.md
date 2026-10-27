@@ -49,6 +49,11 @@ Super+Shift+P opens applications, windows and grouped actions, including the sam
 NIRU Actions. Super+S opens the dedicated web search. `--windows` switches
 directly to an open window.
 
+Informational terminal actions — storage review, task history, diagnostics and
+the installed/running status — keep the terminal open after the command exits
+and wait for Enter. Interactive actions such as OpenCode and system updates use
+the normal terminal lifetime.
+
 `--actions` groups System, Display, Power, Appearance, Wallpaper, Wi-Fi,
 Workspaces, Windows and NIRUX Settings. The Appearance group includes theme selection and a
 compositor toggle for picom transparency and shadows. The Wallpaper group opens

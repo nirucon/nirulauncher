@@ -52,6 +52,12 @@ enum Target {
         terminal: bool,
         path: Option<std::path::PathBuf>,
     },
+    /// Run in the configured terminal. `hold` keeps the window open after the
+    /// child exits so reports and diagnostics can actually be read.
+    Terminal {
+        argv: Vec<String>,
+        hold: bool,
+    },
     Focus(Window),
     Confirm(Action),
     /// Switch the open launcher to another view without starting a second one.
@@ -85,6 +91,7 @@ impl Item {
     fn target_kind(&self) -> &'static str {
         match self.target {
             Target::Spawn { .. } => "spawn",
+            Target::Terminal { .. } => "terminal",
             Target::Focus(_) => "focus",
             Target::Confirm(_) => "confirm",
             Target::Mode(_) => "mode",
@@ -857,12 +864,11 @@ fn append_saved_actions(items: &mut Vec<Item>, actions: &[saved::SavedAction]) {
 }
 
 fn intent_terminal(args: &[&str]) -> Target {
-    Target::Spawn {
+    Target::Terminal {
         argv: std::iter::once("niructl".to_string())
             .chain(args.iter().map(|arg| (*arg).to_string()))
             .collect(),
-        terminal: true,
-        path: None,
+        hold: true,
     }
 }
 
@@ -892,12 +898,12 @@ fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
         I::FocusMode => (
             "Focus mode for 60 minutes",
             "DND and keep-awake · niructl mode focus 60",
-            intent_terminal(&["mode", "focus", "60"]),
+            spawn_niructl(&["mode", "focus", "60"]),
         ),
         I::PresentationMode => (
             "Presentation mode for 60 minutes",
             "DND and keep-awake · niructl mode presentation 60",
-            intent_terminal(&["mode", "presentation", "60"]),
+            spawn_niructl(&["mode", "presentation", "60"]),
         ),
         I::StopContext => (
             "Stop work context",
@@ -1933,15 +1939,13 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                     continue;
                 }
                 let target = match action {
-                    "doctor" => Target::Spawn {
+                    "doctor" => Target::Terminal {
                         argv: vec!["nirux".into(), "doctor".into()],
-                        terminal: true,
-                        path: None,
+                        hold: true,
                     },
-                    "audio" => Target::Spawn {
+                    "audio" => Target::Terminal {
                         argv: vec!["niructl".into(), "audio".into(), "outputs".into()],
-                        terminal: true,
-                        path: None,
+                        hold: true,
                     },
                     "dnd" => niructl(&["dnd", "toggle"]),
                     "reload" => niructl(&["reload"]),
@@ -1974,10 +1978,9 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             detail: "Runs in a terminal · log out afterwards".into(),
             keywords: String::new(),
             favorite: false,
-            target: Target::Spawn {
+            target: Target::Terminal {
                 argv: vec!["nirux".into(), "update".into()],
-                terminal: true,
-                path: None,
+                hold: true,
             },
         });
     }
@@ -1988,10 +1991,9 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         detail: "Open the full NIRUX health report".into(),
         keywords: String::new(),
         favorite: false,
-        target: Target::Spawn {
+        target: Target::Terminal {
             argv: vec!["nirux".into(), "doctor".into()],
-            terminal: true,
-            path: None,
+            hold: true,
         },
     });
 
@@ -2054,15 +2056,14 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             detail: "Carl Larsson and Erik Satie: red, blue, green and noir in 4K/8K".into(),
             keywords: "extra colour color wallpaper satie carl larsson red blue green noir".into(),
             favorite: false,
-            target: Target::Spawn {
+            target: Target::Terminal {
                 argv: vec![
                     "nirux".to_string(),
                     "wallpapers".to_string(),
                     "download".to_string(),
                     "extras".to_string(),
                 ],
-                terminal: true,
-                path: None,
+                hold: true,
             },
         });
     }
@@ -2085,10 +2086,9 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         detail: "Run nirux update in a terminal".into(),
         keywords: String::new(),
         favorite: false,
-        target: Target::Spawn {
+        target: Target::Terminal {
             argv: vec!["nirux".into(), "update".into()],
-            terminal: true,
-            path: None,
+            hold: true,
         },
     });
     items.push(Item {
@@ -2152,10 +2152,9 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             detail: detail.into(),
             keywords: format!("system action {key}").replace(':', " "),
             favorite: false,
-            target: Target::Spawn {
+            target: Target::Terminal {
                 argv: argv.into_iter().map(str::to_string).collect(),
-                terminal: true,
-                path: None,
+                hold: true,
             },
         });
     }
@@ -2174,11 +2173,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             detail: "DND and keep-awake; restored when the timer ends".into(),
             keywords: format!("context mode {action} dnd idle meeting presentation focus"),
             favorite: false,
-            target: Target::Spawn {
-                argv: vec!["niructl".into(), "mode".into(), action.into(), "60".into()],
-                terminal: true,
-                path: None,
-            },
+            target: niructl(&["mode", action, "60"]),
         });
     }
     items.push(Item {
@@ -2203,10 +2198,9 @@ fn action_items(cfg: &Config) -> Vec<Item> {
                 .into(),
             keywords: "agent opencode ai assist task diagnose".into(),
             favorite: false,
-            target: Target::Spawn {
+            target: Target::Terminal {
                 argv: vec!["niructl".into(), "agent".into()],
-                terminal: true,
-                path: None,
+                hold: false,
             },
         });
     } else {
@@ -3802,6 +3796,21 @@ impl Ui {
                 Ok(true)
             }
             Target::Info => Ok(true),
+            Target::Terminal { argv, hold } => {
+                match spawn_terminal_command(&argv, hold, &self.cfg) {
+                    Ok(()) => {
+                        record_usage(key);
+                        self.usage = load_usage();
+                        Ok(false)
+                    }
+                    Err(e) => {
+                        self.error = e;
+                        self.confirm = None;
+                        self.draw()?;
+                        Ok(true)
+                    }
+                }
+            }
             Target::Focus(window) => {
                 let atom = intern(&self.c, "_NET_ACTIVE_WINDOW")?;
                 let event =
@@ -4055,6 +4064,7 @@ fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str>
     match target {
         Target::Spawn { argv, .. } if !argv.is_empty() => Ok(argv),
         Target::Spawn { .. } => Err("This row has no command to save"),
+        Target::Terminal { .. } => Err("Terminal actions cannot be saved as background actions"),
         Target::Confirm(_) => Err("Confirmation actions are built in and cannot be saved"),
         Target::Mode(_) => Err("View switches cannot be saved as actions"),
         Target::Info => Err("Info rows cannot be saved as actions"),
@@ -4089,6 +4099,32 @@ fn spawn_command(
         command.current_dir(path);
     }
     command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot start {program}: {e}"))
+}
+
+/// Launch a terminal command. Informational actions keep the terminal open
+/// after the child exits, with its exit status, so a report is not lost when
+/// kitty/alacritty/foot closes the window immediately.
+fn spawn_terminal_command(
+    argv: &[String],
+    hold: bool,
+    cfg: &Config,
+) -> std::result::Result<(), String> {
+    if argv.is_empty() {
+        return Err("empty command".into());
+    }
+    let mut full = cfg.terminal.clone();
+    if hold {
+        const HOLD: &str = "status=0; \"$@\" || status=$?; printf '\\n[exit %s] Press Enter to close...\\n' \"$status\"; read -r _ || :; exit \"$status\"";
+        full.extend(["sh", "-c", HOLD, "sh"].into_iter().map(str::to_string));
+    }
+    full.extend(argv.iter().cloned());
+    let program = full.remove(0);
+    Command::new(&program)
+        .args(&full)
+        .stdin(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("cannot start {program}: {e}"))
@@ -4631,7 +4667,7 @@ mod wallpaper_tests {
             .find(|i| i.key == "action:wallpaper:download-extras")
             .unwrap();
         assert!(extra.name.contains("additional"));
-        assert_eq!(extra.target_kind(), "spawn");
+        assert_eq!(extra.target_kind(), "terminal");
     }
 
     #[test]
