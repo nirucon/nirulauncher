@@ -29,6 +29,7 @@ nirulauncher --search             # dedicated web search, every engine listed
 nirulauncher --search PHRASE      # the phrase is already in the field
 nirulauncher --list-search        # the engines and their addresses
 nirulauncher --actions
+nirulauncher --system-actions     # focused NIRU Actions view (Super+A)
 nirulauncher --windows
 nirulauncher --microphone
 nirulauncher --bluetooth
@@ -42,8 +43,9 @@ nirulauncher --timing             # idle, lock and display-off timers
 nirulauncher --check-config
 ```
 
-Super+P opens application search. Super+Shift+P opens applications, windows and
-grouped actions. Super+S opens the dedicated web search. `--windows` switches
+Super+P opens application search. Super+A opens the focused NIRU Actions view;
+Super+Shift+P opens applications, windows and grouped actions, including the same
+NIRU Actions. Super+S opens the dedicated web search. `--windows` switches
 directly to an open window.
 
 `--actions` groups System, Display, Power, Appearance, Wallpaper, Wi-Fi,
@@ -62,8 +64,19 @@ It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
 actions, display profiles (preview/keep/revert, arrange side by side, and a
 "turn this screen" entry for every rotation), a link to **NIRU Display** when it
 is installed, power profiles, diagnostics, work
-modes, recipes, lock, reload, DND, idle inhibition, brightness, night light,
-themes, workspaces and confirmed session actions.
+modes, recipes, storage review, off-screen window recovery, recent tasks,
+installed/running status and confirmed session actions. The dedicated
+`--system-actions` view is the same catalogue used in `--actions`.
+
+### NIRU Actions and OpenCode
+
+Deterministic actions work without OpenCode, an account, a model or network. When
+`opencode` is installed, **Ask OpenCode…** opens a terminal handoff through
+`niructl agent`. The handoff writes a small context file, uses the installed
+OpenCode interface, keeps OpenCode's permissions and never uses auto-approval.
+Missing OpenCode is shown as unavailable; it is never installed automatically.
+Deterministic storage/cache actions remain review-first and do not delete personal
+files.
 
 ### Wi-Fi
 
