@@ -932,6 +932,7 @@ fn shortcut_action_label(action: &str) -> String {
         "launcher" => "Application launcher",
         "launcher_search" => "Web search",
         "launcher_unified" => "Actions and layouts",
+        "launcher_actions" => "NIRU system actions",
         "window_switcher" => "Window switcher",
         "lock" => "Lock screen",
         "suspend" => "Lock and suspend",
@@ -1666,6 +1667,111 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             target: Target::Confirm(action),
         });
     }
+    // NIRU Actions: practical actions that need no agent, network or model.
+    for (key, name, detail, argv) in [
+        (
+            "maintenance:storage-review",
+            "Review storage…",
+            "Inspect caches, trash, old downloads and NIRUX generations; nothing is removed",
+            vec!["niructl", "storage", "review"],
+        ),
+        (
+            "maintenance:windows-rescue",
+            "Bring off-screen windows back",
+            "Move managed windows that are outside every connected display",
+            vec!["niructl", "windows", "rescue"],
+        ),
+        (
+            "maintenance:tasks",
+            "Recent NIRU tasks",
+            "Show deterministic and OpenCode-assisted task results",
+            vec!["niructl", "task", "list"],
+        ),
+        (
+            "maintenance:health",
+            "NIRUX installed and running",
+            "Show the installed generation and current desktop state",
+            vec!["nirux", "status"],
+        ),
+    ] {
+        if argv.first() == Some(&"nirux") && !in_path("nirux") {
+            continue;
+        }
+        items.push(Item {
+            key: format!("action:{key}"),
+            group: "NIRU Actions".into(),
+            name: name.into(),
+            detail: detail.into(),
+            keywords: format!("system action {key}").replace(':', " "),
+            favorite: false,
+            target: Target::Spawn {
+                argv: argv.into_iter().map(str::to_string).collect(),
+                terminal: true,
+                path: None,
+            },
+        });
+    }
+    for (key, name, action) in [
+        ("focus-60", "Focus mode for 60 minutes", "focus"),
+        (
+            "presentation-60",
+            "Presentation mode for 60 minutes",
+            "presentation",
+        ),
+    ] {
+        items.push(Item {
+            key: format!("action:mode:{key}"),
+            group: "Work contexts".into(),
+            name: name.into(),
+            detail: "DND and keep-awake; restored when the timer ends".into(),
+            keywords: format!("context mode {action} dnd idle meeting presentation focus"),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["niructl".into(), "mode".into(), action.into(), "60".into()],
+                terminal: true,
+                path: None,
+            },
+        });
+    }
+    items.push(Item {
+        key: "action:mode:stop".into(),
+        group: "Work contexts".into(),
+        name: "Stop work context".into(),
+        detail: "Restore DND and idle inhibition changed by the active mode".into(),
+        keywords: "context mode stop restore dnd idle".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: vec!["niructl".into(), "mode".into(), "stop".into()],
+            terminal: false,
+            path: None,
+        },
+    });
+    if in_path("opencode") {
+        items.push(Item {
+            key: "action:agent:opencode".into(),
+            group: "NIRU Actions".into(),
+            name: "Ask OpenCode…".into(),
+            detail: "Open a terminal task handoff with local NIRUX diagnostics; ask before changes"
+                .into(),
+            keywords: "agent opencode ai assist task diagnose".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["niructl".into(), "agent".into()],
+                terminal: true,
+                path: None,
+            },
+        });
+    } else {
+        items.push(Item {
+            key: "action:agent:unavailable".into(),
+            group: "NIRU Actions".into(),
+            name: "OpenCode assistance unavailable".into(),
+            detail: "OpenCode is not installed; the deterministic actions still work".into(),
+            keywords: "agent opencode ai unavailable".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
     let _ = cfg;
     items
 }
@@ -1941,6 +2047,47 @@ fn filtered(
     hits.into_iter().map(|(_, _, _, _, i)| i).collect()
 }
 
+fn system_action_priority(group: &str) -> u8 {
+    match group {
+        "NIRU Actions" => 0,
+        "Work contexts" => 1,
+        "Diagnostics" => 2,
+        "System" => 3,
+        "Audio" => 4,
+        "Display" => 5,
+        "Layouts" => 6,
+        "Appearance" => 7,
+        "Settings" | "NIRUX Settings" => 8,
+        "Recipes" => 9,
+        "Power" => 10,
+        "Shortcuts" => 11,
+        "Themes" => 12,
+        "Wallpaper" => 13,
+        "Workspaces" => 14,
+        _ => 15,
+    }
+}
+
+fn filtered_for_mode(
+    items: &[Item],
+    query: &str,
+    usage: &std::collections::HashMap<String, u64>,
+    mode: &str,
+) -> Vec<usize> {
+    if mode == "system-actions" && query.trim().is_empty() {
+        let mut order: Vec<usize> = (0..items.len()).collect();
+        order.sort_by_key(|index| {
+            (
+                system_action_priority(&items[*index].group),
+                items[*index].label().to_lowercase(),
+            )
+        });
+        order
+    } else {
+        filtered(items, query, usage)
+    }
+}
+
 /// The complete row list for the dedicated web-search mode.
 ///
 /// Kept outside `Ui` so the empty, one-character, alias and address cases can
@@ -2059,6 +2206,8 @@ impl Ui {
             items.extend(action_items(&cfg));
             items.extend(window_items(&c, root));
             items.extend(app_items(apps));
+        } else if mode == "system-actions" {
+            items.extend(action_items(&cfg));
         } else if mode == "microphone" {
             items.extend(microphone_items());
         } else if mode == "bluetooth" {
@@ -2126,7 +2275,7 @@ impl Ui {
         // Settings opens taller than its own short list so the views it
         // switches to (Keybindings, Idle timing) are not shown in a five-row
         // window; the launcher never resizes while it is open.
-        let rows = if matches!(mode, "settings" | "wifi") {
+        let rows = if matches!(mode, "settings" | "wifi" | "system-actions") {
             cfg.max_rows
         } else {
             (items.len() + search_slot).min(cfg.max_rows).max(1)
@@ -2246,7 +2395,7 @@ impl Ui {
         c.set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME)?;
         c.flush()?;
         let usage = load_usage();
-        let filtered = filtered(&items, "", &usage);
+        let filtered = filtered_for_mode(&items, "", &usage, mode);
         let mut ui = Self {
             c,
             root,
@@ -2336,6 +2485,8 @@ impl Ui {
             "Bluetooth"
         } else if self.mode == "wifi" {
             "Wi-Fi"
+        } else if self.mode == "system-actions" {
+            "NIRU Actions"
         } else if self.items.iter().all(|item| item.group == "Power") {
             "Power"
         } else if self
@@ -2983,7 +3134,7 @@ impl Ui {
             // lock ladder. Alphabetical sorting would scramble both.
             self.filtered = (0..self.items.len()).collect();
         } else {
-            self.filtered = filtered(&self.items, &self.query, &self.usage);
+            self.filtered = filtered_for_mode(&self.items, &self.query, &self.usage, &self.mode);
         }
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
@@ -3044,7 +3195,7 @@ impl Ui {
         self.number_edit = None;
         self.profile_name = None;
         self.confirm = None;
-        self.filtered = filtered(&self.items, "", &self.usage);
+        self.filtered = filtered_for_mode(&self.items, "", &self.usage, &self.mode);
         self.selected = 0;
         self.offset = 0;
         self.error.clear();
@@ -3513,10 +3664,12 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
-        "--apps" | "--actions" | "--windows" | "--microphone" | "--bluetooth" | "--displays"
-        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--wifi" => {
+        "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
+        | "--bluetooth" | "--displays" | "--power" | "--keys" | "--settings" | "--themes"
+        | "--timing" | "--wifi" => {
             let mode = match arg {
                 "--actions" => "actions",
+                "--system-actions" => "system-actions",
                 "--windows" => "windows",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
@@ -3536,13 +3689,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--wifi|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--wifi|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
@@ -3853,6 +4006,52 @@ mod wallpaper_tests {
                 "{key} should not be a launcher row"
             );
         }
+    }
+
+    #[test]
+    fn the_focused_action_view_puts_maintenance_before_appearance() {
+        let items = vec![
+            super::Item {
+                key: "theme:x".into(),
+                group: "Appearance".into(),
+                name: "Theme".into(),
+                detail: String::new(),
+                keywords: String::new(),
+                favorite: false,
+                target: super::Target::Info,
+            },
+            super::Item {
+                key: "maintenance:x".into(),
+                group: "NIRU Actions".into(),
+                name: "Review storage".into(),
+                detail: String::new(),
+                keywords: String::new(),
+                favorite: false,
+                target: super::Target::Info,
+            },
+        ];
+        let usage = std::collections::HashMap::new();
+        let order = super::filtered_for_mode(&items, "", &usage, "system-actions");
+        assert_eq!(order.first(), Some(&1));
+    }
+
+    #[test]
+    fn system_actions_cover_maintenance_without_destructive_defaults() {
+        let _guard = lock();
+        let items = items_with_wallpaper(true);
+        let keys: Vec<&str> = items
+            .iter()
+            .filter(|item| item.group == "NIRU Actions")
+            .map(|item| item.key.as_str())
+            .collect();
+        assert!(keys.contains(&"action:maintenance:storage-review"));
+        assert!(keys.contains(&"action:maintenance:windows-rescue"));
+        assert!(keys.contains(&"action:maintenance:tasks"));
+        assert!(keys.contains(&"action:agent:unavailable"));
+        assert!(
+            !keys.contains(&"action:maintenance:cache-clean"),
+            "cache cleanup must not run without confirmation"
+        );
     }
 
     #[test]
