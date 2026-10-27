@@ -55,8 +55,10 @@ compositor toggle for picom transparency and shadows. The Wallpaper group opens
 **NIRU Wallpaper**, where an image, its scale, rotation and the screen are
 chosen with previews. When NIRUX is installed, a second row downloads the
 optional Carl Larsson and Erik Satie colour packs in a terminal; the launcher
-does not duplicate the image browser or apply wallpaper itself. Layouts are listed with their shortcuts: Tile, Left stack, Monocle,
-Centered, Centered floating, Floating and Fibonacci, plus previous/next.
+does not duplicate the image browser or apply wallpaper itself. Layouts are
+listed with their shortcuts: Tile, Left stack, Monocle, Centered, Centered
+floating, Floating, Fibonacci and Scroll (one/two visible columns), plus
+previous/next.
 The list is alphabetical, with up to five pinned favourites first. Press
 Ctrl+P on a row to pin or unpin it. Theme mode starts with **Open theme
 selector** when the graphical selector is installed, followed by the visible

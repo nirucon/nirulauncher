@@ -1224,6 +1224,9 @@ fn shortcut_action_label(action: &str) -> String {
             if let Some(rest) = action.strip_prefix("layout ") {
                 return format!("Layout: {rest}");
             }
+            if let Some(rest) = action.strip_prefix("scroll_columns ") {
+                return format!("Scroll columns: {rest}");
+            }
             if let Some(rest) = action.strip_prefix("tag ") {
                 return format!("Workspace: {rest}");
             }
@@ -1811,6 +1814,22 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         ),
         ("Layout: Floating", "Super+F", "layout floating"),
         ("Layout: Fibonacci", "Super+Ctrl+E", "layout fibonacci"),
+        ("Layout: Scroll", "Super+Ctrl+S", "layout scroll"),
+        (
+            "Scroll: one visible column",
+            "Use in Scroll · niructl layout columns 1",
+            "layout columns 1",
+        ),
+        (
+            "Scroll: two visible columns",
+            "Use in Scroll · niructl layout columns 2",
+            "layout columns 2",
+        ),
+        (
+            "Scroll: toggle visible columns",
+            "Super+Ctrl+Shift+S",
+            "layout columns toggle",
+        ),
         ("Previous layout", "Super+Ctrl+,", "layout_prev"),
         ("Next layout", "Super+Ctrl+.", "layout_next"),
         ("Suspend", "Lock, then suspend", "suspend"),
