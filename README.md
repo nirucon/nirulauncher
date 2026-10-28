@@ -33,6 +33,7 @@ nirulauncher --system-actions     # focused NIRU Actions view (Super+A)
 nirulauncher --windows
 nirulauncher --microphone
 nirulauncher --sound              # output, input, applications and microphone test
+nirulauncher --clip               # full/region/webcam recording and stop
 nirulauncher --bluetooth
 nirulauncher --wifi               # Wi-Fi networks, saved profiles and radio
 nirulauncher --displays

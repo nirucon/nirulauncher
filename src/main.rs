@@ -498,6 +498,62 @@ fn sound_items(
     items
 }
 
+fn clip_items() -> Vec<Item> {
+    let spawn = |key: &str, name: &str, detail: &str, args: &[&str]| Item {
+        key: key.into(),
+        group: "Capture".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: "record recording screen webcam capture video spela in".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: std::iter::once("niruclip".to_string())
+                .chain(args.iter().map(|arg| (*arg).to_string()))
+                .collect(),
+            terminal: false,
+            path: None,
+        },
+    };
+    vec![
+        spawn(
+            "clip:full",
+            "Record full screen",
+            "MKV · countdown 3 · microphone",
+            &["--full", "--countdown", "3"],
+        ),
+        spawn(
+            "clip:region",
+            "Record region",
+            "Select a rectangle with slop",
+            &["--region", "--countdown", "3"],
+        ),
+        spawn(
+            "clip:webcam",
+            "Record webcam",
+            "Camera only with the default microphone",
+            &["--webcam-only", "--countdown", "3"],
+        ),
+        spawn(
+            "clip:stop",
+            "Stop recording",
+            "Finalize the active NIRUCLIP session",
+            &["--stop"],
+        ),
+        Item {
+            key: "clip:status".into(),
+            group: "Capture".into(),
+            name: "Recording status".into(),
+            detail: "niruclip --status".into(),
+            keywords: "record recording status".into(),
+            favorite: false,
+            target: Target::Terminal {
+                argv: vec!["niruclip".into(), "--status".into()],
+                hold: true,
+            },
+        },
+    ]
+}
+
 fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
     let mut items = Vec::new();
     let group = "Wi-Fi";
@@ -2151,6 +2207,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             },
         });
     }
+    items.extend(clip_items());
     items.extend(sound_action_items());
     items.extend(theme_items());
     // Choosing an image, the scale, rotation and theme following belong to
@@ -2945,7 +3002,9 @@ impl Ui {
             Vec::new()
         };
         let mut items = Vec::new();
-        if mode == "actions" {
+        if mode == "clip" {
+            items.extend(clip_items());
+        } else if mode == "actions" {
             items.extend(action_items(&cfg));
             append_saved_actions(&mut items, &saved_actions);
             items.extend(window_items(&c, root));
@@ -3248,6 +3307,8 @@ impl Ui {
             "Wi-Fi"
         } else if self.mode == "sound" {
             "Sound"
+        } else if self.mode == "clip" {
+            "Capture"
         } else if self.mode == "system-actions" {
             "NIRU Actions"
         } else if self.items.iter().all(|item| item.group == "Power") {
@@ -3387,6 +3448,8 @@ impl Ui {
             "Enter connects or acts · Ctrl+R rescan · Esc close".to_string()
         } else if self.mode == "sound" {
             "Enter selects or acts · Esc close · ↑↓ move".to_string()
+        } else if self.mode == "clip" {
+            "Enter starts or stops capture · Esc close · ↑↓ move".to_string()
         } else if self.web_mode {
             "Enter opens search · Tab moves · Esc closes".to_string()
         } else if self.mode == "keys" {
@@ -4123,6 +4186,7 @@ impl Ui {
             "themes" => theme_items(),
             "timing" => timing_items(),
             "input" => input_items(),
+            "clip" => clip_items(),
             "sound" => sound_items(
                 self.sound.as_ref(),
                 self.sound_test.as_ref(),
@@ -4701,7 +4765,7 @@ fn main() {
         }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
         | "--bluetooth" | "--displays" | "--power" | "--keys" | "--settings" | "--themes"
-        | "--timing" | "--input" | "--wifi" | "--sound" => {
+        | "--timing" | "--input" | "--wifi" | "--sound" | "--clip" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -4717,6 +4781,7 @@ fn main() {
                 "--input" => "input",
                 "--wifi" => "wifi",
                 "--sound" => "sound",
+                "--clip" => "clip",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -4726,13 +4791,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--sound|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--sound|--clip|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
