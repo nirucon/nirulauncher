@@ -286,8 +286,15 @@ fn microphone_items() -> Vec<Item> {
 }
 
 fn sound_info(name: &str, detail: &str) -> Item {
+    let key = format!(
+        "sound:info:{}",
+        name.to_lowercase()
+            .chars()
+            .map(|ch| if ch.is_alphanumeric() { ch } else { '-' })
+            .collect::<String>()
+    );
     Item {
-        key: "sound:status".into(),
+        key,
         group: "Audio".into(),
         name: name.into(),
         detail: detail.into(),
@@ -3020,7 +3027,7 @@ impl Ui {
         // Settings opens taller than its own short list so the views it
         // switches to (Keybindings, Idle timing) are not shown in a five-row
         // window; the launcher never resizes while it is open.
-        let rows = if matches!(mode, "settings" | "wifi" | "system-actions") {
+        let rows = if matches!(mode, "settings" | "wifi" | "system-actions" | "sound") {
             cfg.max_rows
         } else {
             (items.len() + search_slot).min(cfg.max_rows).max(1)
