@@ -640,7 +640,12 @@ fn health_items() -> Vec<Item> {
             favorite: false,
             target: Target::Mode("sound".into()),
         }),
-        Err(error) => items.push(info("health:audio", "Health", "Audio unavailable".into(), error)),
+        Err(error) => items.push(info(
+            "health:audio",
+            "Health",
+            "Audio unavailable".into(),
+            error,
+        )),
     }
     let network = wifi::snapshot(false);
     let network_name = if !network.present {
@@ -694,7 +699,12 @@ fn health_items() -> Vec<Item> {
         .output()
         .ok()
         .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
-        .and_then(|value| value.get("state").and_then(|state| state.as_str()).map(str::to_string))
+        .and_then(|value| {
+            value
+                .get("state")
+                .and_then(|state| state.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| "unavailable".into());
     items.push(Item {
         key: "health:capture".into(),
