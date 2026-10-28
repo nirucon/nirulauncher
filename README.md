@@ -33,7 +33,8 @@ nirulauncher --system-actions     # focused NIRU Actions view (Super+A)
 nirulauncher --windows
 nirulauncher --microphone
 nirulauncher --sound              # output, input, applications and microphone test
-nirulauncher --clip               # full/region/webcam and four overlay recording actions
+nirulauncher --clip               # capture profiles, overlays, recovery and status
+nirulauncher --health             # installed/running, session, audio, network, display, capture
 nirulauncher --bluetooth
 nirulauncher --wifi               # Wi-Fi networks, saved profiles and radio
 nirulauncher --displays
@@ -50,6 +51,11 @@ Super+P opens application search. Super+A opens the focused NIRU Actions view;
 Super+Shift+P opens applications, windows and grouped actions, including the same
 NIRU Actions. Super+S opens the dedicated web search. `--windows` switches
 directly to an open window.
+
+The Health overview uses the existing NIRUX status and system providers. It runs
+only when opened, shows truthful unavailable states and links each row to the
+existing settings view or diagnostic command. Capture rows come from the same
+NIRUCLIP state file that NIRUBAR observes.
 
 Informational terminal actions — storage review, task history, diagnostics and
 the installed/running status — keep the terminal open after the command exits
