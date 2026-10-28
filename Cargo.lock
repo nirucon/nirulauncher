@@ -482,10 +482,11 @@ dependencies = [
 
 [[package]]
 name = "nirulauncher"
-version = "0.2.59"
+version = "0.2.60"
 dependencies = [
  "ab_glyph",
  "indexmap",
+ "libc",
  "serde",
  "serde_json",
  "toml",

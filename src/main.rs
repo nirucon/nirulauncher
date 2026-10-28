@@ -498,6 +498,228 @@ fn sound_items(
     items
 }
 
+fn clip_profiles() -> Vec<(String, String, String, String, String)> {
+    let Ok(output) = Command::new("niruclip")
+        .arg("--list-profiles")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            (fields.len() >= 5).then(|| {
+                (
+                    fields[0].to_string(),
+                    fields[1].to_string(),
+                    fields[2].to_string(),
+                    fields[3].to_string(),
+                    fields[4].to_string(),
+                )
+            })
+        })
+        .collect()
+}
+
+fn clip_recoverable() -> bool {
+    let Ok(output) = Command::new("niruclip")
+        .args(["--status", "--json"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("recoverable")
+                .and_then(|recoverable| recoverable.as_bool())
+        })
+        .unwrap_or(false)
+}
+
+fn health_items() -> Vec<Item> {
+    let mut items = Vec::new();
+    let info = |key: &str, group: &str, name: String, detail: String| Item {
+        key: key.into(),
+        group: group.into(),
+        name,
+        detail,
+        keywords: "health status diagnostics installed running".into(),
+        favorite: false,
+        target: Target::Info,
+    };
+    match Command::new("nirux").arg("status").output() {
+        Ok(output) if output.status.success() => {
+            for (index, line) in String::from_utf8_lossy(&output.stdout).lines().enumerate() {
+                if line.starts_with("installed ") {
+                    continue;
+                }
+                let key = if index == 0 {
+                    "health:nirux".to_string()
+                } else {
+                    format!("health:nirux:{index}")
+                };
+                let target = if line.contains("old generation") {
+                    Target::Terminal {
+                        argv: vec!["nirux".into(), "status".into()],
+                        hold: true,
+                    }
+                } else {
+                    Target::Info
+                };
+                items.push(Item {
+                    key,
+                    group: "Health".into(),
+                    name: line.to_string(),
+                    detail: if line.contains("old generation") {
+                        "Log out and back in to activate".into()
+                    } else {
+                        "NIRUX runtime status".into()
+                    },
+                    keywords: "health status".into(),
+                    favorite: false,
+                    target,
+                });
+            }
+        }
+        Ok(_) => items.push(info(
+            "health:nirux",
+            "Health",
+            "NIRUX status needs attention".into(),
+            "Run the full diagnostics for details".into(),
+        )),
+        Err(_) => items.push(info(
+            "health:nirux",
+            "Health",
+            "NIRUX is not available".into(),
+            "The installer command was not found".into(),
+        )),
+    }
+    match sound::status() {
+        Ok(snapshot) if snapshot.available => {
+            let output = snapshot
+                .output
+                .as_ref()
+                .map(|reading| format!("{} ({}%)", reading.name, reading.percent))
+                .unwrap_or_else(|| "no default output".into());
+            let input = snapshot
+                .input
+                .as_ref()
+                .map(|reading| format!("{} ({}%)", reading.name, reading.percent))
+                .unwrap_or_else(|| "no default input".into());
+            items.push(Item {
+                key: "health:audio".into(),
+                group: "Health".into(),
+                name: "Audio available".into(),
+                detail: format!("Output: {output} · Input: {input}"),
+                keywords: "audio pipewire microphone".into(),
+                favorite: false,
+                target: Target::Mode("sound".into()),
+            });
+        }
+        Ok(snapshot) => items.push(Item {
+            key: "health:audio".into(),
+            group: "Health".into(),
+            name: "Audio unavailable".into(),
+            detail: snapshot
+                .reason
+                .unwrap_or_else(|| "PipeWire is not responding".into()),
+            keywords: "audio pipewire microphone".into(),
+            favorite: false,
+            target: Target::Mode("sound".into()),
+        }),
+        Err(error) => items.push(info("health:audio", "Health", "Audio unavailable".into(), error)),
+    }
+    let network = wifi::snapshot(false);
+    let network_name = if !network.present {
+        "Network provider unavailable".to_string()
+    } else if network.connected {
+        format!(
+            "Network: {}",
+            if network.ssid.is_empty() {
+                "connected"
+            } else {
+                &network.ssid
+            }
+        )
+    } else {
+        "Network: disconnected".to_string()
+    };
+    items.push(Item {
+        key: "health:network".into(),
+        group: "Health".into(),
+        name: network_name,
+        detail: "Open Wi-Fi and connection details".into(),
+        keywords: "network wifi connection".into(),
+        favorite: false,
+        target: Target::Mode("wifi".into()),
+    });
+    let display_ok = Command::new("niructl")
+        .args(["monitors"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    items.push(Item {
+        key: "health:display".into(),
+        group: "Health".into(),
+        name: if display_ok {
+            "Display service available".into()
+        } else {
+            "Display service unavailable".into()
+        },
+        detail: "Open display layout and profiles".into(),
+        keywords: "display monitor randr".into(),
+        favorite: false,
+        target: Target::Mode("displays".into()),
+    });
+    let capture = Command::new("niruclip")
+        .args(["--status", "--json"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+        .and_then(|value| value.get("state").and_then(|state| state.as_str()).map(str::to_string))
+        .unwrap_or_else(|| "unavailable".into());
+    items.push(Item {
+        key: "health:capture".into(),
+        group: "Health".into(),
+        name: format!("Capture: {capture}"),
+        detail: "Open capture profiles and recording controls".into(),
+        keywords: "capture recording camera niruclip".into(),
+        favorite: false,
+        target: Target::Mode("clip".into()),
+    });
+    items.push(Item {
+        key: "health:doctor".into(),
+        group: "Health".into(),
+        name: "Run full diagnostics".into(),
+        detail: "Packages, session, display and runtime checks".into(),
+        keywords: "doctor diagnostics".into(),
+        favorite: false,
+        target: Target::Terminal {
+            argv: vec!["nirux".into(), "doctor".into()],
+            hold: true,
+        },
+    });
+    items
+}
+
 fn clip_items() -> Vec<Item> {
     let spawn = |key: &str, name: &str, detail: &str, args: &[&str]| Item {
         key: key.into(),
@@ -514,7 +736,7 @@ fn clip_items() -> Vec<Item> {
             path: None,
         },
     };
-    vec![
+    let mut items = vec![
         spawn(
             "clip:full",
             "Full screen",
@@ -615,7 +837,24 @@ fn clip_items() -> Vec<Item> {
                 hold: true,
             },
         },
-    ]
+    ];
+    for (name, description, mode, audio, webcam) in clip_profiles() {
+        items.push(spawn(
+            &format!("clip:profile:{name}"),
+            &format!("Profile · {description}"),
+            &format!("{mode} · {audio} · camera {webcam}"),
+            &["--profile", &name, "--countdown", "3"],
+        ));
+    }
+    if clip_recoverable() {
+        items.push(spawn(
+            "clip:recover",
+            "Recover interrupted recording",
+            "Validate the partial file and restore it",
+            &["--recover"],
+        ));
+    }
+    items
 }
 
 fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
@@ -2512,6 +2751,15 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             target: Target::Confirm(action),
         });
     }
+    items.push(Item {
+        key: "action:health-view".into(),
+        group: "System".into(),
+        name: "Health overview".into(),
+        detail: "Installed/running state, audio, network, display and capture".into(),
+        keywords: "health status doctor diagnostics".into(),
+        favorite: false,
+        target: Target::Mode("health".into()),
+    });
     // NIRU Actions: practical actions that need no agent, network or model.
     for (key, name, detail, argv) in [
         (
@@ -3101,6 +3349,8 @@ impl Ui {
             items.extend(input_items());
         } else if mode == "sound" {
             items.extend(sound_items(None, None, Some("Loading audio…")));
+        } else if mode == "health" {
+            items.extend(health_items());
         } else {
             items.extend(app_items(apps));
             append_saved_actions(&mut items, &saved_actions);
@@ -4256,6 +4506,7 @@ impl Ui {
                 self.sound_test.as_ref(),
                 self.sound_busy.as_deref(),
             ),
+            "health" => health_items(),
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
             "displays" => display_items(),
@@ -4829,7 +5080,7 @@ fn main() {
         }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
         | "--bluetooth" | "--displays" | "--power" | "--keys" | "--settings" | "--themes"
-        | "--timing" | "--input" | "--wifi" | "--sound" | "--clip" => {
+        | "--timing" | "--input" | "--wifi" | "--sound" | "--clip" | "--health" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -4846,6 +5097,7 @@ fn main() {
                 "--wifi" => "wifi",
                 "--sound" => "sound",
                 "--clip" => "clip",
+                "--health" => "health",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -4855,13 +5107,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--sound|--clip|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }

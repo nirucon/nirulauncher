@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -57,13 +59,27 @@ pub struct TestResult {
 }
 
 fn bounded_json(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
-    let mut child = Command::new("niructl")
+    let mut command = Command::new("niructl");
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    command.process_group(0);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("could not start niructl: {error}"))?;
+    let pid = child.id() as libc::pid_t;
+    let (tx, rx) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.take(256 * 1024).read_to_end(&mut bytes);
+            let _ = tx.send(bytes);
+        });
+    } else {
+        let _ = tx.send(Vec::new());
+    }
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
     loop {
@@ -72,16 +88,17 @@ fn bounded_json(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 timed_out = true;
-                let _ = child.kill();
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
                 break;
             }
         }
     }
-    let mut bytes = Vec::new();
-    if let Some(stdout) = child.stdout.take() {
-        let _ = stdout.take(256 * 1024).read_to_end(&mut bytes);
-    }
     let status = child.wait().map_err(|error| error.to_string())?;
+    let bytes = rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "audio output did not close".to_string())?;
     if timed_out {
         return Err("audio status timed out".into());
     }
