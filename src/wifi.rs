@@ -933,9 +933,8 @@ fn wpa_connect(
         }
     }
     commands.push_str(&format!("enable_network {id}\nselect_network {id}\nquit\n"));
-    let result = wpa_run_stdin(interface, &commands)
-        .and_then(|_| wait_wpa_activation(interface, ssid))
-        .and_then(|_| wpa_run_stdin(interface, "save_config\nquit\n").map(|_| ()));
+    let result =
+        wpa_run_stdin(interface, &commands).and_then(|_| wait_wpa_activation(interface, ssid));
     if let Err(error) = result {
         let mut restore = format!("remove_network {id}\n");
         if let Some(previous) = previous {
@@ -945,6 +944,7 @@ fn wpa_connect(
         let _ = wpa_run_stdin(interface, &restore);
         return Err(error);
     }
+    let _ = wpa_run_stdin(interface, "save_config\nquit\n");
     Ok(())
 }
 
@@ -994,11 +994,9 @@ fn wpa_forget(interface: &str, ssid: &str) -> Result<(), String> {
         .into_iter()
         .find(|(name, _)| name == ssid)
         .ok_or("That network has no saved profile")?;
-    wpa_run_stdin(
-        interface,
-        &format!("remove_network {id}\nsave_config\nquit\n"),
-    )
-    .map(|_| ())
+    wpa_run_stdin(interface, &format!("remove_network {id}\nquit\n"))?;
+    let _ = wpa_run_stdin(interface, "save_config\nquit\n");
+    Ok(())
 }
 
 fn wpa_quote(value: &str) -> Result<String, String> {
