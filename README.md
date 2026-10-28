@@ -32,6 +32,7 @@ nirulauncher --actions
 nirulauncher --system-actions     # focused NIRU Actions view (Super+A)
 nirulauncher --windows
 nirulauncher --microphone
+nirulauncher --sound              # output, input, applications and microphone test
 nirulauncher --bluetooth
 nirulauncher --wifi               # Wi-Fi networks, saved profiles and radio
 nirulauncher --displays
@@ -68,7 +69,7 @@ The list is alphabetical, with up to five pinned favourites first. Press
 Ctrl+P on a row to pin or unpin it. Theme mode starts with **Open theme
 selector** when the graphical selector is installed, followed by the visible
 themes from the canonical catalogue.
-It exposes audio sources and outputs, microphone mute/gain, Bluetooth device
+It exposes output volume/mute, input sources, microphone mute/gain, a five-second local microphone test, active audio streams, Bluetooth device
 actions, display profiles (preview/keep/revert, arrange side by side, and a
 "turn this screen" entry for every rotation), a link to **NIRU Display** when it
 is installed, power profiles, diagnostics, work

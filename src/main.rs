@@ -9,6 +9,7 @@ mod desktop;
 mod intent;
 mod render;
 mod saved;
+mod sound;
 mod websearch;
 mod wifi;
 
@@ -62,6 +63,8 @@ enum Target {
     Confirm(Action),
     /// Switch the open launcher to another view without starting a second one.
     Mode(String),
+    /// Run an explicit microphone test and show the result in the sound panel.
+    SoundTest(u64),
     Info,
 }
 
@@ -95,6 +98,7 @@ impl Item {
             Target::Focus(_) => "focus",
             Target::Confirm(_) => "confirm",
             Target::Mode(_) => "mode",
+            Target::SoundTest(_) => "sound-test",
             Target::Info => "info",
         }
     }
@@ -157,6 +161,11 @@ struct Ui {
     wifi_rx: Option<Receiver<std::result::Result<wifi::Snapshot, String>>>,
     wifi_busy: Option<String>,
     wifi_secret: Option<WifiSecret>,
+    sound: Option<sound::Snapshot>,
+    sound_rx: Option<Receiver<std::result::Result<sound::Snapshot, String>>>,
+    sound_test_rx: Option<Receiver<std::result::Result<sound::TestResult, String>>>,
+    sound_test: Option<sound::TestResult>,
+    sound_busy: Option<String>,
 }
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
@@ -272,6 +281,212 @@ fn microphone_items() -> Vec<Item> {
             "Microphone unavailable",
             "niructl / WirePlumber did not respond",
         )),
+    }
+    items
+}
+
+fn sound_info(name: &str, detail: &str) -> Item {
+    Item {
+        key: "sound:status".into(),
+        group: "Audio".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: "sound audio volume mute microphone mic".into(),
+        favorite: false,
+        target: Target::Info,
+    }
+}
+
+fn sound_items(
+    snapshot: Option<&sound::Snapshot>,
+    test: Option<&sound::TestResult>,
+    busy: Option<&str>,
+) -> Vec<Item> {
+    if let Some(busy) = busy {
+        return vec![sound_info(busy, "Working…")];
+    }
+    let Some(snapshot) = snapshot else {
+        return vec![sound_info("Loading audio…", "Reading PipeWire state")];
+    };
+    if !snapshot.available {
+        return vec![sound_info(
+            "Audio unavailable",
+            snapshot
+                .reason
+                .as_deref()
+                .unwrap_or("PipeWire is not responding"),
+        )];
+    }
+    let mut items = Vec::new();
+    let output = snapshot.output.as_ref();
+    items.push(sound_info(
+        &format!(
+            "Output · {}",
+            output
+                .map(|row| short_device(&row.name))
+                .unwrap_or_else(|| "No output".into())
+        ),
+        &output
+            .map(|row| {
+                format!(
+                    "{}%{}",
+                    row.percent,
+                    if row.muted { " · muted" } else { "" }
+                )
+            })
+            .unwrap_or_else(|| "No default output".into()),
+    ));
+    items.push(Item {
+        key: "sound:volume-up".into(),
+        group: "Output".into(),
+        name: "Volume +5%".into(),
+        detail: "Raise the default output volume".into(),
+        keywords: "sound audio volume up louder".into(),
+        favorite: false,
+        target: spawn_niructl(&["audio", "volume", "up"]),
+    });
+    items.push(Item {
+        key: "sound:volume-down".into(),
+        group: "Output".into(),
+        name: "Volume −5%".into(),
+        detail: "Lower the default output volume".into(),
+        keywords: "sound audio volume down quieter".into(),
+        favorite: false,
+        target: spawn_niructl(&["audio", "volume", "down"]),
+    });
+    items.push(Item {
+        key: "sound:output-mute".into(),
+        group: "Output".into(),
+        name: "Mute / unmute output".into(),
+        detail: "Toggle the default output · niructl audio mute".into(),
+        keywords: "sound audio mute output speaker".into(),
+        favorite: false,
+        target: spawn_niructl(&["audio", "mute"]),
+    });
+    for node in &snapshot.outputs {
+        items.push(Item {
+            key: format!("sound:output:{}", node.id),
+            group: "Output".into(),
+            name: format!("Use output · {}", short_device(&node.name)),
+            detail: if node.default {
+                "Current output"
+            } else {
+                "Select this output"
+            }
+            .into(),
+            keywords: "sound audio output device speaker".into(),
+            favorite: false,
+            target: spawn_niructl(&["audio", "output", &node.id.to_string()]),
+        });
+    }
+    let input = snapshot.input.as_ref();
+    items.push(sound_info(
+        &format!(
+            "Input · {}",
+            input
+                .map(|row| short_device(&row.name))
+                .unwrap_or_else(|| "No input".into())
+        ),
+        &input
+            .map(|row| {
+                format!(
+                    "{}%{}",
+                    row.percent,
+                    if row.muted { " · muted" } else { "" }
+                )
+            })
+            .unwrap_or_else(|| "No default microphone".into()),
+    ));
+    items.push(Item {
+        key: "sound:mic-up".into(),
+        group: "Input".into(),
+        name: "Microphone level +5%".into(),
+        detail: "Raise input gain without unmuting · niructl audio mic-level up".into(),
+        keywords: "sound audio microphone mic gain level up".into(),
+        favorite: false,
+        target: spawn_niructl(&["audio", "mic-level", "up"]),
+    });
+    items.push(Item {
+        key: "sound:mic-down".into(),
+        group: "Input".into(),
+        name: "Microphone level −5%".into(),
+        detail: "Lower input gain without unmuting · niructl audio mic-level down".into(),
+        keywords: "sound audio microphone mic gain level down".into(),
+        favorite: false,
+        target: spawn_niructl(&["audio", "mic-level", "down"]),
+    });
+    items.push(Item {
+        key: "sound:mic-mute".into(),
+        group: "Input".into(),
+        name: "Mute / unmute microphone".into(),
+        detail: "Toggle input mute · niructl audio mic-mute toggle".into(),
+        keywords: "sound audio microphone mic mute".into(),
+        favorite: false,
+        target: spawn_niructl(&["audio", "mic-mute", "toggle"]),
+    });
+    items.push(Item {
+        key: "sound:mic-test".into(),
+        group: "Input".into(),
+        name: "Test microphone…".into(),
+        detail: "Record five seconds locally and measure peak/RMS".into(),
+        keywords: "sound audio microphone mic test record level".into(),
+        favorite: false,
+        target: Target::SoundTest(5),
+    });
+    for node in &snapshot.sources {
+        items.push(Item {
+            key: format!("sound:input:{}", node.id),
+            group: "Input".into(),
+            name: format!("Use input · {}", short_device(&node.name)),
+            detail: if node.default {
+                "Current input"
+            } else {
+                "Select this input"
+            }
+            .into(),
+            keywords: "sound audio input microphone device".into(),
+            favorite: false,
+            target: spawn_niructl(&["audio", "input", &node.id.to_string()]),
+        });
+    }
+    if let Some(result) = test {
+        let clip = if result.clipping {
+            "clipping"
+        } else {
+            "no clipping"
+        };
+        items.push(sound_info(
+            &format!("Last test · {}", result.verdict),
+            &format!(
+                "Peak {:.1} dBFS · RMS {:.1} dBFS · {clip}",
+                result.peak_dbfs, result.rms_dbfs
+            ),
+        ));
+        if let Some(file) = &result.file {
+            items.push(Item {
+                key: "sound:test-play".into(),
+                group: "Input".into(),
+                name: "Play test recording".into(),
+                detail: "Local temporary WAV · deleted when this panel closes".into(),
+                keywords: "sound audio microphone test listen playback".into(),
+                favorite: false,
+                target: Target::Spawn {
+                    argv: vec!["pw-play".into(), file.clone()],
+                    terminal: false,
+                    path: None,
+                },
+            });
+        }
+    }
+    if !snapshot.streams.is_empty() {
+        for stream in &snapshot.streams {
+            items.push(sound_info(
+                &format!("Application · {}", short_device(&stream.name)),
+                &format!("Active audio stream · id {}", stream.id),
+            ));
+        }
+    } else {
+        items.push(sound_info("Applications", "No active audio streams"));
     }
     items
 }
@@ -1770,6 +1985,59 @@ fn input_items() -> Vec<Item> {
     items
 }
 
+fn sound_action_items() -> Vec<Item> {
+    let mut items = Vec::new();
+    for (key, name, detail, target) in [
+        (
+            "sound:open",
+            "Open Sound…",
+            "Output, input, applications and microphone test",
+            Target::Mode("sound".into()),
+        ),
+        (
+            "sound:mute-output",
+            "Mute output",
+            "Toggle the default output · niructl audio mute",
+            spawn_niructl(&["audio", "mute"]),
+        ),
+        (
+            "sound:mute-microphone",
+            "Mute microphone",
+            "Toggle input mute · niructl audio mic-mute toggle",
+            spawn_niructl(&["audio", "mic-mute", "toggle"]),
+        ),
+        (
+            "sound:mic-level-up",
+            "Microphone level +",
+            "Raise input gain without unmuting · niructl audio mic-level up",
+            spawn_niructl(&["audio", "mic-level", "up"]),
+        ),
+        (
+            "sound:mic-level-down",
+            "Microphone level −",
+            "Lower input gain without unmuting · niructl audio mic-level down",
+            spawn_niructl(&["audio", "mic-level", "down"]),
+        ),
+        (
+            "sound:mic-test",
+            "Test microphone…",
+            "Record five seconds locally and show peak/RMS",
+            Target::SoundTest(5),
+        ),
+    ] {
+        items.push(Item {
+            key: key.into(),
+            group: "Audio".into(),
+            name: name.into(),
+            detail: detail.into(),
+            keywords: "sound audio volume mute microphone mic test level".into(),
+            favorite: false,
+            target,
+        });
+    }
+    items
+}
+
 fn action_items(cfg: &Config) -> Vec<Item> {
     let mut items = Vec::new();
     let niructl = |args: &[&str]| Target::Spawn {
@@ -1876,6 +2144,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             },
         });
     }
+    items.extend(sound_action_items());
     items.extend(theme_items());
     // Choosing an image, the scale, rotation and theme following belong to
     // NIRU Wallpaper, which shows previews and the per-screen choice. The
@@ -2649,6 +2918,14 @@ fn wait_until_viewable(c: &RustConnection, win: Window) -> Result<()> {
     }
 }
 
+impl Drop for Ui {
+    fn drop(&mut self) {
+        if let Some(test) = &self.sound_test {
+            sound::cleanup(&test.file);
+        }
+    }
+}
+
 impl Ui {
     fn new(mode: &str) -> Result<Self> {
         let cfg = Config::load()?;
@@ -2692,6 +2969,8 @@ impl Ui {
             items.extend(timing_items());
         } else if mode == "input" {
             items.extend(input_items());
+        } else if mode == "sound" {
+            items.extend(sound_items(None, None, Some("Loading audio…")));
         } else {
             items.extend(app_items(apps));
             append_saved_actions(&mut items, &saved_actions);
@@ -2719,7 +2998,7 @@ impl Ui {
         for index in favorite_items.into_iter().skip(5) {
             items[index].favorite = false;
         }
-        if items.is_empty() && mode != "search" && mode != "wifi" {
+        if items.is_empty() && mode != "search" && mode != "wifi" && mode != "sound" {
             return Err("no launchable applications or actions found".into());
         }
         let (px, py) = point(&c, root);
@@ -2876,6 +3155,11 @@ impl Ui {
             wifi_rx: None,
             wifi_busy: None,
             wifi_secret: None,
+            sound: None,
+            sound_rx: None,
+            sound_test_rx: None,
+            sound_test: None,
+            sound_busy: None,
             items,
             filtered,
             usage,
@@ -2898,6 +3182,8 @@ impl Ui {
         ui.refilter();
         if mode == "wifi" {
             ui.enter_wifi()?;
+        } else if mode == "sound" {
+            ui.enter_sound()?;
         }
         ui.draw()?;
         Ok(ui)
@@ -2953,6 +3239,8 @@ impl Ui {
             "Bluetooth"
         } else if self.mode == "wifi" {
             "Wi-Fi"
+        } else if self.mode == "sound" {
+            "Sound"
         } else if self.mode == "system-actions" {
             "NIRU Actions"
         } else if self.items.iter().all(|item| item.group == "Power") {
@@ -3090,6 +3378,8 @@ impl Ui {
             busy.clone()
         } else if self.mode == "wifi" {
             "Enter connects or acts · Ctrl+R rescan · Esc close".to_string()
+        } else if self.mode == "sound" {
+            "Enter selects or acts · Esc close · ↑↓ move".to_string()
         } else if self.web_mode {
             "Enter opens search · Tab moves · Esc closes".to_string()
         } else if self.mode == "keys" {
@@ -3130,6 +3420,123 @@ impl Ui {
             .present(&self.c, self.gc, self.win, self.width)?;
         self.c.flush()?;
         Ok(())
+    }
+
+    /// Open the compact sound panel. It paints immediately, then loads the
+    /// PipeWire snapshot in a worker so the launcher never waits on wpctl.
+    fn enter_sound(&mut self) -> Result<()> {
+        self.mode = "sound".into();
+        self.query.clear();
+        self.confirm = None;
+        self.number_edit = None;
+        self.profile_name = None;
+        self.error.clear();
+        if let Some(old) = self.sound_test.take() {
+            sound::cleanup(&old.file);
+        }
+        self.sound = None;
+        self.refresh_sound_items();
+        self.start_sound_job("Loading audio…".into())
+    }
+
+    fn refresh_sound_items(&mut self) {
+        let previous = self
+            .filtered
+            .get(self.selected)
+            .map(|&index| self.items[index].key.clone());
+        let snapshot = self.sound.clone();
+        let test = self.sound_test.clone();
+        let busy = self.sound_busy.clone();
+        self.items = sound_items(snapshot.as_ref(), test.as_ref(), busy.as_deref());
+        self.plain_items = self.items.len();
+        self.filtered = filtered_for_mode(&self.items, &self.query, &self.usage, &self.mode);
+        self.selected = previous
+            .and_then(|key| {
+                self.filtered
+                    .iter()
+                    .position(|&index| self.items[index].key == key)
+            })
+            .unwrap_or(0)
+            .min(self.filtered.len().saturating_sub(1));
+        self.offset = 0;
+    }
+
+    fn start_sound_job(&mut self, label: String) -> Result<()> {
+        if self.sound_rx.is_some() {
+            return Ok(());
+        }
+        let (tx, rx) = mpsc::channel();
+        self.sound_rx = Some(rx);
+        self.error.clear();
+        self.sound_busy = Some(label);
+        thread::spawn(move || {
+            let _ = tx.send(sound::status());
+        });
+        self.draw()
+    }
+
+    fn poll_sound(&mut self) -> Result<bool> {
+        let Some(rx) = self.sound_rx.as_ref() else {
+            return Ok(false);
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => Err("the audio worker stopped".into()),
+        };
+        self.sound_rx = None;
+        self.sound_busy = None;
+        match result {
+            Ok(snapshot) => self.sound = Some(snapshot),
+            Err(error) => self.error = error,
+        }
+        self.refresh_sound_items();
+        self.draw()?;
+        Ok(true)
+    }
+
+    fn start_sound_test(&mut self, seconds: u64) -> Result<()> {
+        if self.sound_test_rx.is_some() {
+            self.error = "Microphone test is already running".into();
+            self.draw()?;
+            return Ok(());
+        }
+        if let Some(old) = self.sound_test.take() {
+            sound::cleanup(&old.file);
+        }
+        let (tx, rx) = mpsc::channel();
+        self.sound_test_rx = Some(rx);
+        self.mode = "sound".into();
+        self.sound_busy = Some(format!("Testing microphone for {seconds} seconds…"));
+        self.error.clear();
+        self.refresh_sound_items();
+        self.draw()?;
+        thread::spawn(move || {
+            let _ = tx.send(sound::microphone_test(seconds));
+        });
+        Ok(())
+    }
+
+    fn poll_sound_test(&mut self) -> Result<bool> {
+        let Some(rx) = self.sound_test_rx.as_ref() else {
+            return Ok(false);
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("the microphone test worker stopped".into())
+            }
+        };
+        self.sound_test_rx = None;
+        self.sound_busy = None;
+        match result {
+            Ok(test) => self.sound_test = Some(test),
+            Err(error) => self.error = error,
+        }
+        self.refresh_sound_items();
+        self.draw()?;
+        Ok(true)
     }
 
     /// Open the Wi-Fi view with a quick status, then scan in a worker.
@@ -3709,6 +4116,11 @@ impl Ui {
             "themes" => theme_items(),
             "timing" => timing_items(),
             "input" => input_items(),
+            "sound" => sound_items(
+                self.sound.as_ref(),
+                self.sound_test.as_ref(),
+                self.sound_busy.as_deref(),
+            ),
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
             "displays" => display_items(),
@@ -3721,6 +4133,9 @@ impl Ui {
     fn switch_mode(&mut self, mode: &str) -> Result<()> {
         if mode == "wifi" {
             return self.enter_wifi();
+        }
+        if mode == "sound" {
+            return self.enter_sound();
         }
         let items = self.mode_items(mode);
         if items.is_empty() {
@@ -3793,6 +4208,10 @@ impl Ui {
             }
             Target::Mode(mode) => {
                 self.switch_mode(&mode)?;
+                Ok(true)
+            }
+            Target::SoundTest(seconds) => {
+                self.start_sound_test(seconds)?;
                 Ok(true)
             }
             Target::Info => Ok(true),
@@ -3896,10 +4315,19 @@ impl Ui {
             if self.wifi_rx.is_some() && self.poll_wifi()? {
                 continue;
             }
+            if self.sound_rx.is_some() && self.poll_sound()? {
+                continue;
+            }
+            if self.sound_test_rx.is_some() && self.poll_sound_test()? {
+                continue;
+            }
             let event = match self.c.poll_for_event()? {
                 Some(event) => event,
                 None => {
-                    if self.wifi_rx.is_some() {
+                    if self.wifi_rx.is_some()
+                        || self.sound_rx.is_some()
+                        || self.sound_test_rx.is_some()
+                    {
                         std::thread::sleep(std::time::Duration::from_millis(40));
                         continue;
                     }
@@ -4067,6 +4495,7 @@ fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str>
         Target::Terminal { .. } => Err("Terminal actions cannot be saved as background actions"),
         Target::Confirm(_) => Err("Confirmation actions are built in and cannot be saved"),
         Target::Mode(_) => Err("View switches cannot be saved as actions"),
+        Target::SoundTest(_) => Err("Microphone tests cannot be saved as actions"),
         Target::Info => Err("Info rows cannot be saved as actions"),
         Target::Focus(_) => Err("Window switches cannot be saved as actions"),
     }
@@ -4265,7 +4694,7 @@ fn main() {
         }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
         | "--bluetooth" | "--displays" | "--power" | "--keys" | "--settings" | "--themes"
-        | "--timing" | "--input" | "--wifi" => {
+        | "--timing" | "--input" | "--wifi" | "--sound" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -4280,6 +4709,7 @@ fn main() {
                 "--timing" => "timing",
                 "--input" => "input",
                 "--wifi" => "wifi",
+                "--sound" => "sound",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -4289,13 +4719,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--sound|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
