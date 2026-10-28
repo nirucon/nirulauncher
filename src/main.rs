@@ -2761,6 +2761,21 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             target: Target::Confirm(action),
         });
     }
+    if in_path("nirupres") {
+        items.push(Item {
+            key: "action:nirupres".into(),
+            group: "Presentation".into(),
+            name: "Open NIRUPRES".into(),
+            detail: "Presentation studio · Follow NIRUX chrome and Talk recording".into(),
+            keywords: "presentation slides deck pdf talk record nirupres".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["nirupres".into()],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
     items.push(Item {
         key: "action:health-view".into(),
         group: "System".into(),
