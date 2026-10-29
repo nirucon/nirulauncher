@@ -5326,14 +5326,16 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
-        "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview"
-        | "--microphone" | "--bluetooth" | "--tailscale" | "--displays" | "--power" | "--keys"
-        | "--settings" | "--themes" | "--timing" | "--input" | "--wifi" | "--sound" | "--clip"
-        | "--health" => {
+        "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview" | "--quick"
+        | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
+        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
+        | "--sound" | "--clip" | "--health" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
                 "--windows" | "--overview" => "windows",
+                "--quick" => "quick",
+                "--clipboard" => "clipboard",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
                 "--tailscale" => "tailscale",
