@@ -10,6 +10,7 @@ mod intent;
 mod render;
 mod saved;
 mod sound;
+mod tailscale;
 mod websearch;
 mod wifi;
 
@@ -1097,6 +1098,53 @@ fn wifi_info(name: &str, detail: &str) -> Item {
         favorite: false,
         target: Target::Info,
     }
+}
+
+fn tailscale_items() -> Vec<Item> {
+    let peers = match tailscale::peers() {
+        Ok(peers) => peers,
+        Err(error) => {
+            return vec![Item {
+                key: "tailscale:unavailable".into(),
+                group: "Tailscale".into(),
+                name: "Tailscale unavailable".into(),
+                detail: error,
+                keywords: "tailscale vpn ssh".into(),
+                favorite: false,
+                target: Target::Info,
+            }]
+        }
+    };
+    if peers.is_empty() {
+        return vec![Item {
+            key: "tailscale:empty".into(),
+            group: "Tailscale".into(),
+            name: "No online Tailscale machines".into(),
+            detail: "Bring a peer online, then reopen this view".into(),
+            keywords: "tailscale vpn ssh".into(),
+            favorite: false,
+            target: Target::Info,
+        }];
+    }
+    peers
+        .into_iter()
+        .map(|peer| Item {
+            key: format!("tailscale:ssh:{}", peer.host),
+            group: "Tailscale".into(),
+            name: peer.host.clone(),
+            detail: if peer.address.is_empty() {
+                "online · ssh".into()
+            } else {
+                format!("{} · ssh", peer.address)
+            },
+            keywords: format!("tailscale vpn ssh {}", peer.address),
+            favorite: false,
+            target: Target::Terminal {
+                argv: vec!["ssh".into(), peer.host],
+                hold: false,
+            },
+        })
+        .collect()
 }
 
 fn bluetooth_items() -> Vec<Item> {
@@ -3353,6 +3401,8 @@ impl Ui {
             items.extend(microphone_items());
         } else if mode == "bluetooth" {
             items.extend(bluetooth_items());
+        } else if mode == "tailscale" {
+            items.extend(tailscale_items());
         } else if mode == "displays" {
             items.extend(display_items());
         } else if mode == "power" {
@@ -3642,6 +3692,8 @@ impl Ui {
             "Displays"
         } else if self.items.iter().all(|item| item.group == "Bluetooth") {
             "Bluetooth"
+        } else if self.items.iter().all(|item| item.group == "Tailscale") {
+            "Tailscale"
         } else if self.mode == "wifi" {
             "Wi-Fi"
         } else if self.mode == "sound" {
@@ -4534,6 +4586,7 @@ impl Ui {
             "health" => health_items(),
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
+            "tailscale" => tailscale_items(),
             "displays" => display_items(),
             "power" => power_items(),
             "windows" => window_items(&self.c, self.root),
@@ -5104,14 +5157,15 @@ fn main() {
                 .map(|_| ())
         }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
-        | "--bluetooth" | "--displays" | "--power" | "--keys" | "--settings" | "--themes"
-        | "--timing" | "--input" | "--wifi" | "--sound" | "--clip" | "--health" => {
+        | "--bluetooth" | "--tailscale" | "--displays" | "--power" | "--keys" | "--settings"
+        | "--themes" | "--timing" | "--input" | "--wifi" | "--sound" | "--clip" | "--health" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
                 "--windows" => "windows",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
+                "--tailscale" => "tailscale",
                 "--displays" => "displays",
                 "--power" => "power",
                 "--keys" => "keys",
@@ -5132,13 +5186,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
