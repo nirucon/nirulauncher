@@ -1147,6 +1147,153 @@ fn tailscale_items() -> Vec<Item> {
         .collect()
 }
 
+fn clipboard_items() -> Vec<Item> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                .join(".local/state")
+        });
+    let path = base.join("niru/clipboard.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(entries) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(entries) = entries.as_array() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_i64()?;
+            let body = entry.get("text")?.as_str()?;
+            let line = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            let preview = if line.chars().count() > 96 {
+                format!("{}…", line.chars().take(96).collect::<String>())
+            } else {
+                line
+            };
+            Some(Item {
+                key: format!("clipboard:{id}"),
+                group: "Clipboard".into(),
+                name: preview,
+                detail: "Copy this entry back to the clipboard".into(),
+                keywords: "clipboard history paste".into(),
+                favorite: false,
+                target: Target::Spawn {
+                    argv: vec!["niruclipboard".into(), "copy".into(), id.to_string()],
+                    terminal: false,
+                    path: None,
+                },
+            })
+        })
+        .collect()
+}
+
+fn quick_items() -> Vec<Item> {
+    let item = |key: &str, name: &str, detail: &str, target: Target| Item {
+        key: key.into(),
+        group: "Quick Settings".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: "quick settings control toggle".into(),
+        favorite: false,
+        target,
+    };
+    vec![
+        item(
+            "quick:volume-up",
+            "Volume up",
+            "Raise output volume",
+            spawn_niructl(&["audio", "volume", "up"]),
+        ),
+        item(
+            "quick:volume-down",
+            "Volume down",
+            "Lower output volume",
+            spawn_niructl(&["audio", "volume", "down"]),
+        ),
+        item(
+            "quick:volume-mute",
+            "Toggle output mute",
+            "Mute or unmute the output",
+            spawn_niructl(&["audio", "mute"]),
+        ),
+        item(
+            "quick:mic-mute",
+            "Toggle microphone mute",
+            "Mute or unmute the input",
+            spawn_niructl(&["audio", "mic-mute", "toggle"]),
+        ),
+        item(
+            "quick:wifi",
+            "Wi-Fi and network",
+            "Open the Wi-Fi selector",
+            Target::Mode("wifi".into()),
+        ),
+        item(
+            "quick:bluetooth",
+            "Bluetooth",
+            "Open Bluetooth devices",
+            Target::Mode("bluetooth".into()),
+        ),
+        item(
+            "quick:displays",
+            "Displays",
+            "Open display profiles and rotation",
+            Target::Mode("displays".into()),
+        ),
+        item(
+            "quick:power",
+            "Power profile",
+            "Choose Power saver, Balanced or Performance",
+            Target::Mode("power".into()),
+        ),
+        item(
+            "quick:themes",
+            "Themes",
+            "Choose a NIRUX theme",
+            Target::Mode("themes".into()),
+        ),
+        item(
+            "quick:sound",
+            "Audio devices",
+            "Choose output and input devices",
+            Target::Mode("sound".into()),
+        ),
+        item(
+            "quick:dnd",
+            "Toggle Do Not Disturb",
+            "Suppress notification popups",
+            Target::Spawn {
+                argv: vec!["nirunotify".into(), "--dnd".into(), "toggle".into()],
+                terminal: false,
+                path: None,
+            },
+        ),
+        item(
+            "quick:nightlight",
+            "Toggle night light",
+            "Warm the display for evening",
+            spawn_niructl(&["nightlight", "toggle"]),
+        ),
+        item(
+            "quick:idle",
+            "Toggle idle inhibition",
+            "Keep the screen awake while active",
+            spawn_niructl(&["idle", "toggle"]),
+        ),
+        item(
+            "quick:lock",
+            "Lock screen",
+            "Lock the current session",
+            spawn_niructl(&["lock"]),
+        ),
+    ]
+}
+
 fn bluetooth_items() -> Vec<Item> {
     let mut items = Vec::new();
     let Ok(output) = Command::new("niructl")
@@ -2971,6 +3118,7 @@ fn window_items(c: &RustConnection, root: Window) -> Vec<Item> {
         .unwrap_or_default();
     let name_atom = intern(c, "_NET_WM_NAME").ok();
     let utf8 = intern(c, "UTF8_STRING").ok();
+    let desktop_atom = intern(c, "_NET_WM_DESKTOP").ok();
     let mut items = Vec::new();
     for window in windows {
         let class = c
@@ -3000,16 +3148,28 @@ fn window_items(c: &RustConnection, root: Window) -> Vec<Item> {
                     .map(|r| String::from_utf8_lossy(&r.value).to_string())
             })
             .unwrap_or_else(|| format!("Window {window}"));
+        let desktop = desktop_atom.and_then(|atom| {
+            c.get_property(false, window, atom, AtomEnum::CARDINAL, 0, 1)
+                .ok()?
+                .reply()
+                .ok()?
+                .value32()?
+                .next()
+        });
+        let group = desktop
+            .map(|desktop| format!("Workspace {}", desktop + 1))
+            .unwrap_or_else(|| "Windows".into());
         items.push(Item {
             key: format!("window:{window}"),
-            group: "Windows".into(),
+            group,
             name: title,
             detail: "Switch to this window".into(),
-            keywords: String::new(),
+            keywords: class.replace('\0', " "),
             favorite: false,
             target: Target::Focus(window),
         });
     }
+    items.sort_by_key(|item| (item.group.clone(), item.name.to_lowercase()));
     items.truncate(64);
     items
 }
@@ -3401,6 +3561,10 @@ impl Ui {
             items.extend(microphone_items());
         } else if mode == "bluetooth" {
             items.extend(bluetooth_items());
+        } else if mode == "quick" {
+            items.extend(quick_items());
+        } else if mode == "clipboard" {
+            items.extend(clipboard_items());
         } else if mode == "tailscale" {
             items.extend(tailscale_items());
         } else if mode == "displays" {
@@ -3692,6 +3856,10 @@ impl Ui {
             "Displays"
         } else if self.items.iter().all(|item| item.group == "Bluetooth") {
             "Bluetooth"
+        } else if self.items.iter().all(|item| item.group == "Quick Settings") {
+            "Quick Settings"
+        } else if self.items.iter().all(|item| item.group == "Clipboard") {
+            "Clipboard History"
         } else if self.items.iter().all(|item| item.group == "Tailscale") {
             "Tailscale"
         } else if self.mode == "wifi" {
@@ -4586,6 +4754,8 @@ impl Ui {
             "health" => health_items(),
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
+            "quick" => quick_items(),
+            "clipboard" => clipboard_items(),
             "tailscale" => tailscale_items(),
             "displays" => display_items(),
             "power" => power_items(),
@@ -5156,13 +5326,14 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
-        "--apps" | "--actions" | "--system-actions" | "--windows" | "--microphone"
-        | "--bluetooth" | "--tailscale" | "--displays" | "--power" | "--keys" | "--settings"
-        | "--themes" | "--timing" | "--input" | "--wifi" | "--sound" | "--clip" | "--health" => {
+        "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview"
+        | "--microphone" | "--bluetooth" | "--tailscale" | "--displays" | "--power" | "--keys"
+        | "--settings" | "--themes" | "--timing" | "--input" | "--wifi" | "--sound" | "--clip"
+        | "--health" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
-                "--windows" => "windows",
+                "--windows" | "--overview" => "windows",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
                 "--tailscale" => "tailscale",
@@ -5186,13 +5357,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
