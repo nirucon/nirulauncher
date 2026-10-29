@@ -100,13 +100,13 @@ Typing an exact English or Swedish phrase in `--apps`, `--actions` or
 `--system-actions` adds up to three **Intent** rows above ordinary results. A
 phrase is only matched after case, whitespace and punctuation normalization; it
 never becomes a shell command and the typed text is never inserted into argv.
-Supported phrases include lock/lås, logout/logga ut, reboot/starta om,
-shutdown/stäng av, focus mode/fokusläge, presentation/mötesläge, stop
-context/avsluta läge, DND/stör ej, keep awake/håll vaken, volume and microphone
-mute, brightness, night light, compositor, off-screen window rescue and Wi-Fi
-radio on/off through NetworkManager (`nmcli`). Missing `nmcli` shows an
-unavailable info row instead of claiming success; all other actions use the same
-fixed argv as the action catalogue.
+Supported English phrases include lock, logout, reboot, shutdown, focus mode,
+presentation mode, stop context, DND, keep awake, volume and microphone mute,
+brightness, night light, compositor, off-screen window rescue and Wi-Fi radio
+on/off through NetworkManager (`nmcli`). Additional language aliases are listed
+in [Intent aliases](docs/ALIASES.md). Missing `nmcli` shows an unavailable info
+row instead of claiming success; all other actions use the same fixed argv as
+the action catalogue.
 
 At startup the launcher reads `Xft.dpi` and scales its width, row height,
 padding and font size for high-DPI displays. Set `NIRU_UI_SCALE=1` to disable
