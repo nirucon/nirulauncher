@@ -1258,6 +1258,30 @@ fn quick_items() -> Vec<Item> {
             Target::Mode("themes".into()),
         ),
         item(
+            "quick:bar-top",
+            "Bar: top",
+            "Place the NIRUBAR panel at the top",
+            spawn_niructl(&["bar", "top"]),
+        ),
+        item(
+            "quick:bar-bottom",
+            "Bar: bottom",
+            "Place the NIRUBAR panel at the bottom",
+            spawn_niructl(&["bar", "bottom"]),
+        ),
+        item(
+            "quick:bar-hide",
+            "Bar: hidden",
+            "Hide the bar until you show a bar edge again",
+            spawn_niructl(&["bar", "hide"]),
+        ),
+        item(
+            "quick:bar-show",
+            "Bar: show",
+            "Show the bar at its configured edge",
+            spawn_niructl(&["bar", "show"]),
+        ),
+        item(
             "quick:sound",
             "Audio devices",
             "Choose output and input devices",
