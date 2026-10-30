@@ -1201,8 +1201,8 @@ fn agent_items() -> Vec<Item> {
     vec![Item {
         key: "agent:prompt".into(),
         group: "OpenCode".into(),
-        name: "Ask OpenCode".into(),
-        detail: "Type a short prompt above · Enter opens the floating TUI".into(),
+        name: "Start terminal".into(),
+        detail: "Type above · Enter opens the TUI".into(),
         keywords: "agent opencode ai ask prompt".into(),
         favorite: false,
         target: Target::Info,
@@ -3958,7 +3958,11 @@ impl Ui {
         } else if let Some(name) = &self.profile_name {
             format!("{title}: {name}")
         } else if self.query.is_empty() {
-            title.to_string()
+            if self.mode == "agent" {
+                "Type a short prompt…".to_string()
+            } else {
+                title.to_string()
+            }
         } else {
             format!("{title}: {}", self.query)
         };

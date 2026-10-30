@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "nirulauncher"
-version = "0.2.68"
+version = "0.2.69"
 dependencies = [
  "ab_glyph",
  "indexmap",
