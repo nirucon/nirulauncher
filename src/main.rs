@@ -1282,6 +1282,16 @@ fn quick_items() -> Vec<Item> {
             spawn_niructl(&["bar", "show"]),
         ),
         item(
+            "quick:bar-title",
+            "Bar: window title",
+            "Show or hide the active window title",
+            Target::Spawn {
+                argv: vec!["nirubar".into(), "--toggle-title".into()],
+                terminal: false,
+                path: None,
+            },
+        ),
+        item(
             "quick:sound",
             "Audio devices",
             "Choose output and input devices",
