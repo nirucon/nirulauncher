@@ -35,6 +35,7 @@ nirulauncher --microphone
 nirulauncher --sound              # output, input, applications and microphone test
 nirulauncher --clip               # capture profiles, overlays, recovery and status
 nirulauncher --health             # installed/running, session, audio, network, display, capture
+nirulauncher --agent              # short OpenCode prompt, then a centred TUI
 nirulauncher --bluetooth
 nirulauncher --wifi               # Wi-Fi networks, saved profiles and radio
 nirulauncher --displays
@@ -91,8 +92,10 @@ Deterministic actions work without OpenCode, an account, a model or network. Whe
 `niructl agent`. The handoff writes a small context file, uses the installed
 OpenCode interface, keeps OpenCode's permissions and never uses auto-approval.
 Missing OpenCode is shown as unavailable; it is never installed automatically.
-Deterministic storage/cache actions remain review-first and do not delete personal
-files.
+`--agent` is the compact prompt path: type one short prompt, press Enter, and the
+same handoff opens in a centred floating terminal. The prompt is one argv value,
+never a shell fragment. Deterministic storage/cache actions remain review-first
+and do not delete personal files.
 
 ### Intent search and saved actions
 

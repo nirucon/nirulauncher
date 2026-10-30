@@ -60,6 +60,8 @@ enum Target {
         argv: Vec<String>,
         hold: bool,
     },
+    /// Open a short prompt in a centred OpenCode terminal.
+    Agent(String),
     Focus(Window),
     Confirm(Action),
     /// Switch the open launcher to another view without starting a second one.
@@ -96,6 +98,7 @@ impl Item {
         match self.target {
             Target::Spawn { .. } => "spawn",
             Target::Terminal { .. } => "terminal",
+            Target::Agent(_) => "agent",
             Target::Focus(_) => "focus",
             Target::Confirm(_) => "confirm",
             Target::Mode(_) => "mode",
@@ -1190,6 +1193,20 @@ fn clipboard_items() -> Vec<Item> {
             })
         })
         .collect()
+}
+
+/// The single row behind the compact OpenCode prompt view. The query itself
+/// is the prompt; the row is a stable focus target and an explanation.
+fn agent_items() -> Vec<Item> {
+    vec![Item {
+        key: "agent:prompt".into(),
+        group: "OpenCode".into(),
+        name: "Ask OpenCode".into(),
+        detail: "Type a short prompt above · Enter opens the floating TUI".into(),
+        keywords: "agent opencode ai ask prompt".into(),
+        favorite: false,
+        target: Target::Info,
+    }]
 }
 
 fn quick_items() -> Vec<Item> {
@@ -3429,6 +3446,11 @@ fn filtered_for_mode(
     usage: &std::collections::HashMap<String, u64>,
     mode: &str,
 ) -> Vec<usize> {
+    if mode == "agent" {
+        // The query is the prompt, not a filter. Keeping the row selected
+        // makes Enter predictable while the user types.
+        return (0..items.len()).collect();
+    }
     if mode == "system-actions" && query.trim().is_empty() {
         let mut order: Vec<usize> = (0..items.len()).collect();
         order.sort_by_key(|index| {
@@ -3595,6 +3617,8 @@ impl Ui {
             items.extend(microphone_items());
         } else if mode == "bluetooth" {
             items.extend(bluetooth_items());
+        } else if mode == "agent" {
+            items.extend(agent_items());
         } else if mode == "quick" {
             items.extend(quick_items());
         } else if mode == "clipboard" {
@@ -3868,6 +3892,8 @@ impl Ui {
             "Name the layout profile"
         } else if self.confirm.is_some() {
             "Confirm"
+        } else if self.mode == "agent" {
+            "Ask OpenCode"
         } else if self.web_mode {
             "Search the web"
         } else if self.items.iter().all(|item| item.group == "Shortcuts") {
@@ -4037,6 +4063,8 @@ impl Ui {
             }
         } else if let Some(busy) = &self.wifi_busy {
             busy.clone()
+        } else if self.mode == "agent" {
+            "Type a prompt · Enter starts OpenCode · Esc closes".to_string()
         } else if self.mode == "wifi" {
             "Enter connects or acts · Ctrl+R rescan · Esc close".to_string()
         } else if self.mode == "sound" {
@@ -4789,6 +4817,7 @@ impl Ui {
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
             "quick" => quick_items(),
+            "agent" => agent_items(),
             "clipboard" => clipboard_items(),
             "tailscale" => tailscale_items(),
             "displays" => display_items(),
@@ -4898,6 +4927,19 @@ impl Ui {
                     }
                 }
             }
+            Target::Agent(prompt) => match spawn_agent(&prompt, &self.cfg) {
+                Ok(()) => {
+                    record_usage(key);
+                    self.usage = load_usage();
+                    Ok(false)
+                }
+                Err(e) => {
+                    self.error = e;
+                    self.confirm = None;
+                    self.draw()?;
+                    Ok(true)
+                }
+            },
             Target::Focus(window) => {
                 let atom = intern(&self.c, "_NET_ACTIVE_WINDOW")?;
                 let event =
@@ -4934,6 +4976,20 @@ impl Ui {
     }
 
     fn activate(&mut self) -> Result<bool> {
+        if self.mode == "agent" {
+            let prompt = self.query.trim().to_string();
+            if prompt.is_empty() {
+                self.error = "Type a prompt first".into();
+                self.draw()?;
+                return Ok(true);
+            }
+            if !in_path("opencode") {
+                self.error = "OpenCode is not installed".into();
+                self.draw()?;
+                return Ok(true);
+            }
+            return self.execute("agent:prompt", Target::Agent(prompt));
+        }
         if self.web_mode {
             let trimmed = self.query.trim();
             if trimmed.is_empty() {
@@ -5161,6 +5217,7 @@ fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str>
         Target::Spawn { argv, .. } if !argv.is_empty() => Ok(argv),
         Target::Spawn { .. } => Err("This row has no command to save"),
         Target::Terminal { .. } => Err("Terminal actions cannot be saved as background actions"),
+        Target::Agent(_) => Err("Agent prompts cannot be saved as background actions"),
         Target::Confirm(_) => Err("Confirmation actions are built in and cannot be saved"),
         Target::Mode(_) => Err("View switches cannot be saved as actions"),
         Target::SoundTest(_) => Err("Microphone tests cannot be saved as actions"),
@@ -5196,6 +5253,47 @@ fn spawn_command(
         command.current_dir(path);
     }
     command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot start {program}: {e}"))
+}
+
+/// The terminal command for an agent prompt. The prompt is one argv element,
+/// never a shell fragment. Kitty and Alacritty use `--class`, Foot uses
+/// `--app-id`; NIRUWM recognises `niru-agent` and centres it as a floating TUI.
+fn agent_command(prompt: &str, cfg: &Config) -> Vec<String> {
+    let mut full = cfg.terminal.clone();
+    if full.is_empty() {
+        return full;
+    }
+    let terminal = std::path::Path::new(&full[0])
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let class_flag = match terminal.as_str() {
+        "kitty" | "alacritty" | "wezterm" => Some("--class"),
+        "foot" => Some("--app-id"),
+        "xterm" | "urxvt" | "rxvt" => Some("-class"),
+        _ => None,
+    };
+    if let Some(flag) = class_flag {
+        full.push(flag.into());
+        full.push("niru-agent".into());
+    }
+    full.extend(["niructl".into(), "agent".into(), prompt.into()]);
+    full
+}
+
+fn spawn_agent(prompt: &str, cfg: &Config) -> std::result::Result<(), String> {
+    let mut full = agent_command(prompt, cfg);
+    if full.is_empty() {
+        return Err("terminal command is empty".into());
+    }
+    let program = full.remove(0);
+    Command::new(&program)
+        .args(&full)
+        .stdin(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("cannot start {program}: {e}"))
@@ -5363,12 +5461,13 @@ fn main() {
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview" | "--quick"
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
-        | "--sound" | "--clip" | "--health" => {
+        | "--sound" | "--clip" | "--health" | "--agent" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
                 "--windows" | "--overview" => "windows",
                 "--quick" => "quick",
+                "--agent" => "agent",
                 "--clipboard" => "clipboard",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
@@ -5393,13 +5492,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
@@ -6107,7 +6206,8 @@ mod search_tests {
 #[cfg(test)]
 mod intent_launcher_tests {
     use super::{
-        intent, intent_first_order, intent_item, intent_items, savable_argv, Action, Target,
+        agent_command, filtered_for_mode, intent, intent_first_order, intent_item, intent_items,
+        savable_argv, Action, Config, Target,
     };
 
     #[test]
@@ -6173,6 +6273,29 @@ mod intent_launcher_tests {
         ] {
             assert!(intent_items(query).is_empty(), "{query:?}");
         }
+    }
+
+    #[test]
+    fn an_agent_prompt_is_one_argument_and_keeps_the_class() {
+        let cfg = Config::default();
+        let prompt = "sammanfatta \"senaste\" ; echo $HOME";
+        let argv = agent_command(prompt, &cfg);
+        assert_eq!(
+            &argv[..5],
+            ["kitty", "--class", "niru-agent", "niructl", "agent"]
+        );
+        assert_eq!(argv.last().map(String::as_str), Some(prompt));
+        assert_eq!(argv.len(), 6, "the prompt must never be split");
+    }
+
+    #[test]
+    fn the_agent_view_keeps_its_row_while_the_prompt_is_typed() {
+        let rows = super::agent_items();
+        let usage = std::collections::HashMap::new();
+        assert_eq!(
+            filtered_for_mode(&rows, "skriv en kort prompt", &usage, "agent"),
+            vec![0]
+        );
     }
 
     #[test]
