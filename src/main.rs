@@ -1209,6 +1209,124 @@ fn agent_items() -> Vec<Item> {
     }]
 }
 
+fn share_items() -> Vec<Item> {
+    let mut items = Vec::new();
+    let devices = Command::new("nirushare")
+        .args(["devices"])
+        .output()
+        .ok()
+        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    items.push(Item {
+        key: "share:clipboard:all".into(),
+        group: "NIRU Share".into(),
+        name: "Share clipboard with all devices".into(),
+        detail: if devices.is_empty() {
+            "No trusted devices"
+        } else {
+            "Queue to every trusted device"
+        }
+        .into(),
+        keywords: "share clipboard all devices tailscale".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: vec![
+                "nirushare".into(),
+                "send".into(),
+                "--clipboard".into(),
+                "--all".into(),
+            ],
+            terminal: false,
+            path: None,
+        },
+    });
+    for device in devices {
+        let Some(host) = device.get("host").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let online = device
+            .get("online")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        items.push(Item {
+            key: format!("share:clipboard:{host}"),
+            group: "NIRU Share".into(),
+            name: format!("Share clipboard with {host}"),
+            detail: if online {
+                "Online"
+            } else {
+                "Offline · queued delivery"
+            }
+            .into(),
+            keywords: format!("share clipboard {host} tailscale"),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec![
+                    "nirushare".into(),
+                    "send".into(),
+                    "--clipboard".into(),
+                    "--to".into(),
+                    host.into(),
+                ],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    items.push(Item {
+        key: "share:clipboard:email".into(),
+        group: "NIRU Share".into(),
+        name: "Share clipboard by email".into(),
+        detail: "Open a draft in the default mail client".into(),
+        keywords: "share clipboard email mail draft".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: vec!["nirushare".into(), "email".into()],
+            terminal: false,
+            path: None,
+        },
+    });
+    let inbox = Command::new("nirushare")
+        .args(["inbox"])
+        .output()
+        .ok()
+        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    for item in inbox.iter().take(20) {
+        let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let kind = item.get("kind").and_then(|v| v.as_str()).unwrap_or("item");
+        let sender = item
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or(kind);
+        let command = if kind == "text" { "copy" } else { "open" };
+        items.push(Item {
+            key: format!("share:inbox:{id}"),
+            group: "NIRU Share".into(),
+            name: format!(
+                "{} {} from {}",
+                if command == "copy" { "Copy" } else { "Open" },
+                name,
+                sender
+            ),
+            detail: format!("Received {kind}"),
+            keywords: format!("share inbox received {sender} {kind}"),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["nirushare".into(), command.into(), id.into()],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    items
+}
+
 fn quick_items() -> Vec<Item> {
     let item = |key: &str, name: &str, detail: &str, target: Target| Item {
         key: key.into(),
@@ -3619,6 +3737,8 @@ impl Ui {
             items.extend(bluetooth_items());
         } else if mode == "agent" {
             items.extend(agent_items());
+        } else if mode == "share" {
+            items.extend(share_items());
         } else if mode == "quick" {
             items.extend(quick_items());
         } else if mode == "clipboard" {
@@ -3918,6 +4038,8 @@ impl Ui {
             "Bluetooth"
         } else if self.items.iter().all(|item| item.group == "Quick Settings") {
             "Quick Settings"
+        } else if self.items.iter().all(|item| item.group == "NIRU Share") {
+            "NIRU Share"
         } else if self.items.iter().all(|item| item.group == "Clipboard") {
             "Clipboard History"
         } else if self.items.iter().all(|item| item.group == "Tailscale") {
@@ -4821,6 +4943,7 @@ impl Ui {
             "microphone" => microphone_items(),
             "bluetooth" => bluetooth_items(),
             "quick" => quick_items(),
+            "share" => share_items(),
             "agent" => agent_items(),
             "clipboard" => clipboard_items(),
             "tailscale" => tailscale_items(),
@@ -5465,13 +5588,14 @@ fn main() {
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview" | "--quick"
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
-        | "--sound" | "--clip" | "--health" | "--agent" => {
+        | "--sound" | "--clip" | "--health" | "--agent" | "--share" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
                 "--windows" | "--overview" => "windows",
                 "--quick" => "quick",
                 "--agent" => "agent",
+                "--share" => "share",
                 "--clipboard" => "clipboard",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
@@ -5496,13 +5620,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
