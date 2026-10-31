@@ -1269,6 +1269,19 @@ fn share_items() -> Vec<Item> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         items.push(Item {
+            key: format!("share:revoke:{host}"),
+            group: "NIRU Share".into(),
+            name: format!("Revoke trust for {host}"),
+            detail: "Stop sending and receiving with this device".into(),
+            keywords: format!("share revoke untrust remove {host}"),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["nirushare".into(), "revoke".into(), host.to_string()],
+                terminal: false,
+                path: None,
+            },
+        });
+        items.push(Item {
             key: format!("share:clipboard:{host}"),
             group: "NIRU Share".into(),
             name: format!("Share {noun} with {host}"),
