@@ -1211,6 +1211,18 @@ fn agent_items() -> Vec<Item> {
 
 fn share_items() -> Vec<Item> {
     let mut items = Vec::new();
+    let pending_file = std::env::var("NIRUSHARE_SEND_FILE")
+        .ok()
+        .filter(|p| !p.is_empty());
+    let payload_args = pending_file
+        .as_ref()
+        .map(|p| vec!["--file".to_string(), p.clone()])
+        .unwrap_or_else(|| vec!["--clipboard".to_string()]);
+    let noun = if pending_file.is_some() {
+        "image"
+    } else {
+        "clipboard"
+    };
     let devices = Command::new("nirushare")
         .args(["devices"])
         .output()
@@ -1221,22 +1233,20 @@ fn share_items() -> Vec<Item> {
     items.push(Item {
         key: "share:clipboard:all".into(),
         group: "NIRU Share".into(),
-        name: "Share clipboard with all devices".into(),
+        name: format!("Share {noun} with all devices"),
         detail: if devices.is_empty() {
-            "No trusted devices"
+            "No trusted devices".to_string()
         } else {
-            "Queue to every trusted device"
-        }
-        .into(),
-        keywords: "share clipboard all devices tailscale".into(),
+            "Queue to every trusted device".into()
+        },
+        keywords: "share clipboard image all devices tailscale".into(),
         favorite: false,
         target: Target::Spawn {
-            argv: vec![
-                "nirushare".into(),
-                "send".into(),
-                "--clipboard".into(),
-                "--all".into(),
-            ],
+            argv: std::iter::once("nirushare".to_string())
+                .chain(std::iter::once("send".to_string()))
+                .chain(payload_args.clone())
+                .chain(std::iter::once("--all".to_string()))
+                .collect(),
             terminal: false,
             path: None,
         },
@@ -1252,7 +1262,7 @@ fn share_items() -> Vec<Item> {
         items.push(Item {
             key: format!("share:clipboard:{host}"),
             group: "NIRU Share".into(),
-            name: format!("Share clipboard with {host}"),
+            name: format!("Share {noun} with {host}"),
             detail: if online {
                 "Online"
             } else {
@@ -1262,13 +1272,12 @@ fn share_items() -> Vec<Item> {
             keywords: format!("share clipboard {host} tailscale"),
             favorite: false,
             target: Target::Spawn {
-                argv: vec![
-                    "nirushare".into(),
-                    "send".into(),
-                    "--clipboard".into(),
-                    "--to".into(),
-                    host.into(),
-                ],
+                argv: std::iter::once("nirushare".to_string())
+                    .chain(std::iter::once("send".to_string()))
+                    .chain(payload_args.clone())
+                    .chain(std::iter::once("--to".to_string()))
+                    .chain(std::iter::once(host.to_string()))
+                    .collect(),
                 terminal: false,
                 path: None,
             },
