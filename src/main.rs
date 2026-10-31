@@ -1223,6 +1223,15 @@ fn share_items() -> Vec<Item> {
     } else {
         "clipboard"
     };
+    items.push(Item {
+        key: "share:pair:open".into(),
+        group: "NIRU Share".into(),
+        name: "Pair a device…".into(),
+        detail: "Enter a trusted host and pairing token".into(),
+        keywords: "share pair trust device".into(),
+        favorite: false,
+        target: Target::Mode("share-pair".into()),
+    });
     let devices = Command::new("nirushare")
         .args(["devices"])
         .output()
@@ -1334,6 +1343,18 @@ fn share_items() -> Vec<Item> {
         });
     }
     items
+}
+
+fn share_pair_items() -> Vec<Item> {
+    vec![Item {
+        key: "share:pair".into(),
+        group: "NIRU Share".into(),
+        name: "Pair a trusted device".into(),
+        detail: "Type: host token · obtain token from the other device".into(),
+        keywords: "share pair trust device token tailscale".into(),
+        favorite: false,
+        target: Target::Info,
+    }]
 }
 
 fn quick_items() -> Vec<Item> {
@@ -3748,6 +3769,8 @@ impl Ui {
             items.extend(agent_items());
         } else if mode == "share" {
             items.extend(share_items());
+        } else if mode == "share-pair" {
+            items.extend(share_pair_items());
         } else if mode == "quick" {
             items.extend(quick_items());
         } else if mode == "clipboard" {
@@ -4047,6 +4070,8 @@ impl Ui {
             "Bluetooth"
         } else if self.items.iter().all(|item| item.group == "Quick Settings") {
             "Quick Settings"
+        } else if self.mode == "share-pair" {
+            "Pair NIRU Share device"
         } else if self.items.iter().all(|item| item.group == "NIRU Share") {
             "NIRU Share"
         } else if self.items.iter().all(|item| item.group == "Clipboard") {
@@ -4200,6 +4225,8 @@ impl Ui {
             busy.clone()
         } else if self.mode == "agent" {
             "Type a prompt · Enter starts OpenCode · Esc closes".to_string()
+        } else if self.mode == "share-pair" {
+            "Type: host token · Enter pairs · Esc closes".to_string()
         } else if self.mode == "wifi" {
             "Enter connects or acts · Ctrl+R rescan · Esc close".to_string()
         } else if self.mode == "sound" {
@@ -4953,6 +4980,7 @@ impl Ui {
             "bluetooth" => bluetooth_items(),
             "quick" => quick_items(),
             "share" => share_items(),
+            "share-pair" => share_pair_items(),
             "agent" => agent_items(),
             "clipboard" => clipboard_items(),
             "tailscale" => tailscale_items(),
@@ -5112,7 +5140,30 @@ impl Ui {
     }
 
     fn activate(&mut self) -> Result<bool> {
-        if self.mode == "agent" {
+        if self.mode == "share-pair" {
+            let parts: Vec<&str> = self.query.split_whitespace().collect();
+            if parts.len() != 2 {
+                self.error = "Type: host token".into();
+                self.draw()?;
+                return Ok(true);
+            }
+            let result = Command::new("nirushare")
+                .args(["trust", parts[0]])
+                .env("NIRUSHARE_TOKEN", parts[1])
+                .status();
+            return match result {
+                Ok(status) if status.success() => {
+                    record_usage("share:pair:open");
+                    self.usage = load_usage();
+                    Ok(false)
+                }
+                _ => {
+                    self.error = "Pairing failed".into();
+                    self.draw()?;
+                    Ok(true)
+                }
+            };
+        } else if self.mode == "agent" {
             let prompt = self.query.trim().to_string();
             if prompt.is_empty() {
                 self.error = "Type a prompt first".into();
@@ -5597,7 +5648,7 @@ fn main() {
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview" | "--quick"
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
-        | "--sound" | "--clip" | "--health" | "--agent" | "--share" => {
+        | "--sound" | "--clip" | "--health" | "--agent" | "--share" | "--share-pair" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -5605,6 +5656,7 @@ fn main() {
                 "--quick" => "quick",
                 "--agent" => "agent",
                 "--share" => "share",
+                "--share-pair" => "share-pair",
                 "--clipboard" => "clipboard",
                 "--microphone" => "microphone",
                 "--bluetooth" => "bluetooth",
@@ -5629,13 +5681,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
