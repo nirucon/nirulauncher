@@ -43,6 +43,8 @@ enum Action {
     Logout,
     Reboot,
     Shutdown,
+    UpdateShutdown,
+    UpdateReboot,
     ResetBar,
     ForgetWifi(String),
 }
@@ -1502,6 +1504,18 @@ fn quick_items() -> Vec<Item> {
             "Lock screen",
             "Lock the current session",
             spawn_niructl(&["lock"]),
+        ),
+        item(
+            "quick:update-restart",
+            "Update and restart",
+            "Update system, NIRUX and extras, then restart",
+            Target::Confirm(Action::UpdateReboot),
+        ),
+        item(
+            "quick:update-shutdown",
+            "Update and shut down",
+            "Update system, NIRUX and extras, then power off",
+            Target::Confirm(Action::UpdateShutdown),
         ),
     ]
 }
@@ -3157,6 +3171,16 @@ fn action_items(cfg: &Config) -> Vec<Item> {
         ("Log out…", "Requires confirmation", Action::Logout),
         ("Reboot…", "Requires confirmation", Action::Reboot),
         ("Shut down…", "Requires confirmation", Action::Shutdown),
+        (
+            "Update and restart…",
+            "Updates system, NIRUX and extras in a terminal, then restarts",
+            Action::UpdateReboot,
+        ),
+        (
+            "Update and shut down…",
+            "Updates system, NIRUX and extras in a terminal, then powers off",
+            Action::UpdateShutdown,
+        ),
     ] {
         items.push(Item {
             key: format!("action:{name}"),
@@ -4218,6 +4242,8 @@ impl Ui {
                     Action::Logout => "log out",
                     Action::Reboot => "reboot",
                     Action::Shutdown => "shut down",
+                    Action::UpdateShutdown => "update and shut down",
+                    Action::UpdateReboot => "update and restart",
                     Action::ResetBar => "reset the bar configuration",
                     Action::ForgetWifi(_) => "forget this network",
                 }
@@ -5052,6 +5078,16 @@ impl Ui {
                         Action::Logout => vec![vec!["niructl".into(), "logout".into()]],
                         Action::Reboot => vec![vec!["niructl".into(), "reboot".into()]],
                         Action::Shutdown => vec![vec!["niructl".into(), "shutdown".into()]],
+                        Action::UpdateShutdown => vec![vec![
+                            "niructl".into(),
+                            "update-shutdown".into(),
+                            "--yes".into(),
+                        ]],
+                        Action::UpdateReboot => vec![vec![
+                            "niructl".into(),
+                            "update-reboot".into(),
+                            "--yes".into(),
+                        ]],
                         Action::ResetBar => vec![
                             vec!["nirubar".into(), "--reset-config".into()],
                             vec!["niructl".into(), "restart-bar".into()],
@@ -6498,6 +6534,27 @@ mod intent_launcher_tests {
             filtered_for_mode(&rows, "skriv en kort prompt", &usage, "agent"),
             vec![0]
         );
+    }
+
+    #[test]
+    fn quick_settings_has_update_and_power_actions() {
+        let rows = super::quick_items();
+        let shutdown = rows
+            .iter()
+            .find(|row| row.key == "quick:update-shutdown")
+            .expect("update and shut down row");
+        let restart = rows
+            .iter()
+            .find(|row| row.key == "quick:update-restart")
+            .expect("update and restart row");
+        assert!(matches!(
+            shutdown.target,
+            Target::Confirm(Action::UpdateShutdown)
+        ));
+        assert!(matches!(
+            restart.target,
+            Target::Confirm(Action::UpdateReboot)
+        ));
     }
 
     #[test]
