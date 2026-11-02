@@ -1431,3 +1431,233 @@ mod tests {
         assert!(matches!(&value[19..20], "8" | "9" | "a" | "b"));
     }
 }
+
+// ── Wired Ethernet ─────────────────────────────────────────────────────────
+//
+// Wired control is deliberately NetworkManager-only. NetworkManager owns the
+// device/profile/DHCP transaction; NIRUX must not simulate it with `ip link
+// up`, replace routes, or take over an interface managed by something else.
+// When NetworkManager is absent the view is read-only and still reports the
+// physical link/carrier and address.
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WiredDevice {
+    pub interface: String,
+    pub state: String,
+    pub connected: bool,
+    pub carrier: bool,
+    pub managed: bool,
+    pub address: String,
+    pub connection: String,
+    pub speed: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WiredSnapshot {
+    pub available: bool,
+    pub manager: String,
+    pub devices: Vec<WiredDevice>,
+    pub error: String,
+}
+
+fn ethernet_interfaces() -> Vec<String> {
+    let Ok(entries) = fs::read_dir("/sys/class/net") else {
+        return Vec::new();
+    };
+    let mut interfaces = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "lo" {
+                return None;
+            }
+            let kind = fs::read_to_string(entry.path().join("type")).ok()?;
+            if kind.trim() != "1" {
+                return None;
+            }
+            // Wi-Fi also reports ARPHRD_ETHER; the wireless/phy80211 links
+            // distinguish it from a real wired interface.
+            if entry.path().join("wireless").exists() || entry.path().join("phy80211").exists() {
+                return None;
+            }
+            Some(name)
+        })
+        .collect::<Vec<_>>();
+    interfaces.sort();
+    interfaces
+}
+
+/// True when the kernel exposes an Ethernet interface. Cheap enough for the
+/// launcher menu; it does not contact NetworkManager.
+pub fn wired_present() -> bool {
+    !ethernet_interfaces().is_empty()
+}
+
+fn wired_address(interface: &str) -> String {
+    let Ok(output) = Command::new("ip")
+        .args(["-o", "-4", "addr", "show", "dev", interface])
+        .env("LC_ALL", "C")
+        .output()
+    else {
+        return String::new();
+    };
+    if !output.status.success() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .skip_while(|word| *word != "inet")
+        .nth(1)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn nm_wired_snapshot(interfaces: &[String]) -> Result<WiredSnapshot, String> {
+    let conn = Connection::system().map_err(|e| format!("system D-Bus: {e}"))?;
+    let nm = proxy(&conn, NM, NM_PATH, NM)?;
+    let paths: Vec<OwnedObjectPath> = nm
+        .call("GetDevices", &())
+        .map_err(|e| format!("NetworkManager devices: {e}"))?;
+    let mut devices = Vec::new();
+    for path in paths {
+        let props = get_all(&conn, NM, path.as_str(), NM_DEVICE)?;
+        if u32_prop(&props, "DeviceType") != Some(1) {
+            continue;
+        }
+        let Some(interface) = string_prop(&props, "Interface") else {
+            continue;
+        };
+        if !interfaces.iter().any(|item| item == &interface) {
+            continue;
+        }
+        let state = u32_prop(&props, "State").unwrap_or(0);
+        let active = path_prop(&props, "ActiveConnection");
+        let mut connection = String::new();
+        let mut address = String::new();
+        if let Some(active) = active.as_deref() {
+            if let Ok(active_props) = get_all(&conn, NM, active, NM_ACTIVE) {
+                connection = string_prop(&active_props, "Id").unwrap_or_default();
+                if let Some(ip4) = path_prop(&active_props, "Ip4Config") {
+                    if let Ok(ip_props) = get_all(&conn, NM, &ip4, NM_IP4) {
+                        address = nm_address(&ip_props).unwrap_or_default();
+                    }
+                }
+            }
+        }
+        let wired_props = get_all(
+            &conn,
+            NM,
+            path.as_str(),
+            "org.freedesktop.NetworkManager.Device.Wired",
+        )
+        .ok();
+        let carrier = wired_props
+            .as_ref()
+            .and_then(|props| bool_prop(props, "Carrier"))
+            .unwrap_or(state >= 30);
+        let speed = wired_props
+            .as_ref()
+            .and_then(|props| u32_prop(props, "Speed"));
+        devices.push(WiredDevice {
+            interface,
+            state: nm_state_name(state).into(),
+            connected: state == 100 && active.is_some(),
+            carrier,
+            managed: bool_prop(&props, "Managed").unwrap_or(false),
+            address,
+            connection,
+            speed,
+        });
+    }
+    devices.sort_by(|a, b| a.interface.cmp(&b.interface));
+    Ok(WiredSnapshot {
+        available: !devices.is_empty(),
+        manager: "NetworkManager".into(),
+        devices,
+        error: String::new(),
+    })
+}
+
+pub fn wired_snapshot() -> WiredSnapshot {
+    let interfaces = ethernet_interfaces();
+    if interfaces.is_empty() {
+        return WiredSnapshot {
+            available: false,
+            manager: "none".into(),
+            error: "No wired Ethernet interface found".into(),
+            ..Default::default()
+        };
+    }
+    let has_nm = Connection::system()
+        .ok()
+        .map(|conn| name_has_owner(&conn, NM))
+        .unwrap_or(false);
+    if has_nm {
+        if let Ok(snapshot) = nm_wired_snapshot(&interfaces) {
+            if snapshot.available {
+                return snapshot;
+            }
+        }
+    }
+    let devices = interfaces
+        .into_iter()
+        .map(|interface| {
+            let carrier = fs::read_to_string(format!("/sys/class/net/{interface}/carrier"))
+                .map(|value| value.trim() == "1")
+                .unwrap_or(false);
+            let state = fs::read_to_string(format!("/sys/class/net/{interface}/operstate"))
+                .map(|value| value.trim().to_string())
+                .unwrap_or_else(|_| "unknown".into());
+            WiredDevice {
+                interface: interface.clone(),
+                state,
+                connected: carrier,
+                carrier,
+                managed: false,
+                address: wired_address(&interface),
+                connection: String::new(),
+                speed: None,
+            }
+        })
+        .collect();
+    WiredSnapshot {
+        available: true,
+        manager: "read-only (no NetworkManager)".into(),
+        devices,
+        error: String::new(),
+    }
+}
+
+fn validate_wired_interface(interface: &str) -> Result<(), String> {
+    if !ethernet_interfaces().iter().any(|item| item == interface) {
+        return Err("unknown Ethernet interface".into());
+    }
+    Ok(())
+}
+
+pub fn wired_connect(interface: &str) -> Result<(), String> {
+    validate_wired_interface(interface)?;
+    let conn = Connection::system().map_err(|e| format!("system D-Bus: {e}"))?;
+    if !name_has_owner(&conn, NM) {
+        return Err("wired control requires NetworkManager".into());
+    }
+    let path = nm_device_path(&conn, interface)?;
+    let device = proxy(&conn, NM, path.as_str(), NM_DEVICE)?;
+    device
+        .call::<_, _, OwnedObjectPath>("Connect", &())
+        .map(|_| ())
+        .map_err(|e| format!("connect {interface}: {e}"))
+}
+
+pub fn wired_disconnect(interface: &str) -> Result<(), String> {
+    validate_wired_interface(interface)?;
+    let conn = Connection::system().map_err(|e| format!("system D-Bus: {e}"))?;
+    if !name_has_owner(&conn, NM) {
+        return Err("wired control requires NetworkManager".into());
+    }
+    let path = nm_device_path(&conn, interface)?;
+    let device = proxy(&conn, NM, path.as_str(), NM_DEVICE)?;
+    device
+        .call::<_, _, ()>("Disconnect", &())
+        .map_err(|e| format!("disconnect {interface}: {e}"))
+}

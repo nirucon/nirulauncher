@@ -38,6 +38,7 @@ nirulauncher --health             # installed/running, session, audio, network, 
 nirulauncher --agent              # short OpenCode prompt, then a centred TUI
 nirulauncher --bluetooth
 nirulauncher --wifi               # Wi-Fi networks, saved profiles and radio
+nirulauncher --wired              # dock/ethernet status and per-interface control
 nirulauncher --displays
 nirulauncher --power
 nirulauncher --keys               # active keybindings, including overrides
@@ -97,6 +98,20 @@ same handoff opens in a centred floating terminal. The prompt is one argv value,
 never a shell fragment. Deterministic storage/cache actions remain review-first
 and do not delete personal files.
 
+### Wired Ethernet
+
+`--wired` lists dock and direct Ethernet interfaces with link/carrier, state,
+address, connection name and speed. On NetworkManager systems it can connect or
+disconnect **one wired interface** using the existing profile. It never disables
+the Wi-Fi radio or global networking, and it does not touch Wi-Fi profiles.
+If NetworkManager is absent, the view is read-only and explains that NIRUX will
+not replace another network manager or guess DHCP/routes.
+
+The Quick Settings entry **Wired network** is shown when an Ethernet interface
+exists. A successful launcher-initiated Wi-Fi or wired connection sends a normal
+NIRUNOTIFY notification with the network/interface, security/state and address;
+passwords are never included.
+
 ### Intent search and saved actions
 
 Typing an exact English or Swedish phrase in `--apps`, `--actions` or
@@ -129,7 +144,9 @@ stored, never a transcript or password.
 
 `--wifi` is the Wi-Fi selector. It is also opened by the bar's Wi-Fi segment and
 by **Wi-Fi** under NIRUX Settings. The view lists the radio state, the connected
-network, saved profiles and scanned networks with signal and security. Enter
+network, saved profiles and scanned networks with signal and security. Arrow
+keys, Page Up/Page Down and the mouse wheel scroll through long network lists.
+Enter
 connects or disconnects; Ctrl+R rescans; Escape closes. A password or hidden
 SSID is typed into the launcher and is never placed in a command line, log,
 snapshot or history.

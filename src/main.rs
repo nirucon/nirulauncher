@@ -167,6 +167,11 @@ struct Ui {
     wifi_rx: Option<Receiver<std::result::Result<wifi::Snapshot, String>>>,
     wifi_busy: Option<String>,
     wifi_secret: Option<WifiSecret>,
+    wifi_connect_pending: bool,
+    wired: Option<wifi::WiredSnapshot>,
+    wired_rx: Option<Receiver<std::result::Result<wifi::WiredSnapshot, String>>>,
+    wired_busy: Option<String>,
+    wired_connect_pending: Option<String>,
     sound: Option<sound::Snapshot>,
     sound_rx: Option<Receiver<std::result::Result<sound::Snapshot, String>>>,
     sound_test_rx: Option<Receiver<std::result::Result<sound::TestResult, String>>>,
@@ -1093,6 +1098,111 @@ fn wifi_filtered(items: &[Item], query: &str) -> Vec<usize> {
         .collect()
 }
 
+fn wired_items(snapshot: &wifi::WiredSnapshot) -> Vec<Item> {
+    let mut items = Vec::new();
+    for device in &snapshot.devices {
+        let address = if device.address.is_empty() {
+            "IP pending".to_string()
+        } else {
+            device.address.clone()
+        };
+        let link = if device.connected {
+            "connected".to_string()
+        } else if !device.carrier {
+            "cable unplugged".to_string()
+        } else {
+            device.state.clone()
+        };
+        let mut detail = format!("{link} · {address}");
+        if !device.connection.is_empty() {
+            detail.push_str(&format!(" · {}", device.connection));
+        }
+        if let Some(speed) = device.speed.filter(|speed| *speed > 0) {
+            detail.push_str(&format!(" · {speed} Mb/s"));
+        }
+        if !device.managed && snapshot.manager == "NetworkManager" {
+            detail.push_str(" · unmanaged");
+        }
+        items.push(Item {
+            key: format!("wired:info:{}", device.interface),
+            group: "Wired".into(),
+            name: format!("Wired: {}", device.interface),
+            detail,
+            keywords: "ethernet wired dock cable network".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+        if snapshot.manager == "NetworkManager" && device.managed {
+            if device.connected {
+                items.push(Item {
+                    key: format!("wired:disconnect:{}", device.interface),
+                    group: "Wired".into(),
+                    name: format!("Disconnect wired {}", device.interface),
+                    detail: "Only this wired connection is changed; Wi-Fi stays untouched".into(),
+                    keywords: "ethernet wired disconnect".into(),
+                    favorite: false,
+                    target: Target::Info,
+                });
+            } else {
+                items.push(Item {
+                    key: format!("wired:connect:{}", device.interface),
+                    group: "Wired".into(),
+                    name: format!("Connect wired {}", device.interface),
+                    detail: "Use the existing NetworkManager wired profile".into(),
+                    keywords: "ethernet wired connect".into(),
+                    favorite: false,
+                    target: Target::Info,
+                });
+            }
+        }
+    }
+    if snapshot.manager != "NetworkManager" && snapshot.available {
+        items.push(wifi_info(
+            "Wired is read-only",
+            "No NetworkManager here; NIRUX will not change routes, DHCP or another manager",
+        ));
+    }
+    if items.is_empty() {
+        items.push(wifi_info(
+            "No wired Ethernet interface",
+            "Connect a dock or cable and rescan",
+        ));
+    }
+    items.push(Item {
+        key: "wired:refresh".into(),
+        group: "Wired".into(),
+        name: "Refresh wired network".into(),
+        detail: "Re-read the physical link and NetworkManager state".into(),
+        keywords: "ethernet cable dock refresh".into(),
+        favorite: false,
+        target: Target::Info,
+    });
+    items
+}
+
+fn notify_network(title: &str, body: &str, icon: &str) {
+    let title = title.to_string();
+    let body = body.to_string();
+    let icon = icon.to_string();
+    thread::spawn(move || {
+        let _ = Command::new("notify-send")
+            .args([
+                "-a",
+                "NIRU Network",
+                "-u",
+                "normal",
+                "-i",
+                &icon,
+                &title,
+                &body,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    });
+}
+
 fn wifi_info(name: &str, detail: &str) -> Item {
     Item {
         key: format!("wifi:info:{name}"),
@@ -1413,6 +1523,21 @@ fn quick_items() -> Vec<Item> {
             "Open the Wi-Fi selector",
             Target::Mode("wifi".into()),
         ),
+        if wifi::wired_present() {
+            item(
+                "quick:wired",
+                "Wired network",
+                "Connect or disconnect dock/ethernet without touching Wi-Fi",
+                Target::Mode("wired".into()),
+            )
+        } else {
+            item(
+                "quick:wired:absent",
+                "Wired network",
+                "No Ethernet interface is present",
+                Target::Info,
+            )
+        },
         item(
             "quick:bluetooth",
             "Bluetooth",
@@ -4021,6 +4146,11 @@ impl Ui {
             wifi_rx: None,
             wifi_busy: None,
             wifi_secret: None,
+            wifi_connect_pending: false,
+            wired: None,
+            wired_rx: None,
+            wired_busy: None,
+            wired_connect_pending: None,
             sound: None,
             sound_rx: None,
             sound_test_rx: None,
@@ -4048,6 +4178,8 @@ impl Ui {
         ui.refilter();
         if mode == "wifi" {
             ui.enter_wifi()?;
+        } else if mode == "wired" {
+            ui.enter_wired()?;
         } else if mode == "sound" {
             ui.enter_sound()?;
         }
@@ -4117,6 +4249,8 @@ impl Ui {
             "Tailscale"
         } else if self.mode == "wifi" {
             "Wi-Fi"
+        } else if self.mode == "wired" {
+            "Wired network"
         } else if self.mode == "sound" {
             "Sound"
         } else if self.mode == "clip" {
@@ -4268,6 +4402,8 @@ impl Ui {
             "Type: host token · Enter pairs · Esc closes".to_string()
         } else if self.mode == "wifi" {
             "Enter connects or acts · Ctrl+R rescan · Esc close".to_string()
+        } else if self.mode == "wired" {
+            "Enter connects or disconnects the wired interface · Esc close".to_string()
         } else if self.mode == "sound" {
             "Enter selects or acts · Esc close · ↑↓ move".to_string()
         } else if self.mode == "clip" {
@@ -4488,6 +4624,9 @@ impl Ui {
             self.draw()?;
             return Ok(());
         }
+        if label.starts_with("Connecting") || label.starts_with("Activating saved profile") {
+            self.wifi_connect_pending = true;
+        }
         let (tx, rx) = mpsc::channel();
         self.wifi_rx = Some(rx);
         self.wifi_busy = Some(label);
@@ -4515,6 +4654,31 @@ impl Ui {
         match result {
             Ok(snapshot) => {
                 let first_scan = self.wifi.as_ref().is_some_and(|old| old.manager.is_empty());
+                if self.wifi_connect_pending {
+                    if snapshot.connected {
+                        notify_network(
+                            "Wi-Fi connected",
+                            &format!(
+                                "{}{}\n{} · {}\n{}",
+                                snapshot.ssid,
+                                if snapshot.security.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" · {}", snapshot.security)
+                                },
+                                snapshot.interface,
+                                snapshot.manager,
+                                if snapshot.address.is_empty() {
+                                    "IP pending".to_string()
+                                } else {
+                                    snapshot.address.clone()
+                                }
+                            ),
+                            "network-wireless",
+                        );
+                    }
+                    self.wifi_connect_pending = false;
+                }
                 self.error = snapshot.error.clone();
                 self.wifi = Some(snapshot);
                 self.refresh_wifi_items();
@@ -4530,6 +4694,139 @@ impl Ui {
         }
         self.draw()?;
         Ok(true)
+    }
+
+    fn enter_wired(&mut self) -> Result<()> {
+        self.mode = "wired".into();
+        self.query.clear();
+        self.confirm = None;
+        self.number_edit = None;
+        self.profile_name = None;
+        self.wifi_secret = None;
+        self.error.clear();
+        self.wired = Some(wifi::wired_snapshot());
+        self.refresh_wired_items();
+        self.start_wired_job("Refreshing wired network…".into(), || Ok(()))
+    }
+
+    fn refresh_wired_items(&mut self) {
+        let previous = self
+            .filtered
+            .get(self.selected)
+            .map(|&index| self.items[index].key.clone());
+        let Some(snapshot) = &self.wired else {
+            return;
+        };
+        self.items = wired_items(snapshot);
+        self.plain_items = self.items.len();
+        self.filtered = filtered_for_mode(&self.items, "", &self.usage, "wired");
+        self.selected = previous
+            .and_then(|key| {
+                self.filtered
+                    .iter()
+                    .position(|&index| self.items[index].key == key)
+            })
+            .unwrap_or(0);
+        self.offset = 0;
+    }
+
+    fn start_wired_job<F>(&mut self, label: String, job: F) -> Result<()>
+    where
+        F: FnOnce() -> std::result::Result<(), String> + Send + 'static,
+    {
+        if self.wired_rx.is_some() {
+            self.error = "Wait for the current wired operation".into();
+            self.draw()?;
+            return Ok(());
+        }
+        let (tx, rx) = mpsc::channel();
+        self.wired_rx = Some(rx);
+        self.wired_busy = Some(label);
+        self.error.clear();
+        thread::spawn(move || {
+            let result = job().map(|_| wifi::wired_snapshot());
+            let _ = tx.send(result);
+        });
+        self.draw()
+    }
+
+    fn poll_wired(&mut self) -> Result<bool> {
+        let Some(rx) = self.wired_rx.as_ref() else {
+            return Ok(false);
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("The wired worker stopped unexpectedly".into())
+            }
+        };
+        self.wired_rx = None;
+        self.wired_busy = None;
+        match result {
+            Ok(snapshot) => {
+                if let Some(interface) = self.wired_connect_pending.take() {
+                    if let Some(device) = snapshot
+                        .devices
+                        .iter()
+                        .find(|device| device.interface == interface && device.connected)
+                    {
+                        notify_network(
+                            "Wired connected",
+                            &format!(
+                                "{}{}
+{} · {}",
+                                if device.connection.is_empty() {
+                                    interface.clone()
+                                } else {
+                                    device.connection.clone()
+                                },
+                                if device.address.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" · {}", device.address)
+                                },
+                                device.interface,
+                                device.state
+                            ),
+                            "network-wired",
+                        );
+                    }
+                }
+                self.error = snapshot.error.clone();
+                self.wired = Some(snapshot);
+                self.refresh_wired_items();
+            }
+            Err(error) => {
+                self.wired_connect_pending = None;
+                self.error = error;
+            }
+        }
+        self.draw()?;
+        Ok(true)
+    }
+
+    fn wired_execute(&mut self, key: &str) -> Result<Option<bool>> {
+        if let Some(interface) = key.strip_prefix("wired:connect:") {
+            let interface = interface.to_string();
+            self.wired_connect_pending = Some(interface.clone());
+            self.start_wired_job(format!("Connecting wired {interface}…"), move || {
+                wifi::wired_connect(&interface)
+            })?;
+            return Ok(Some(true));
+        }
+        if let Some(interface) = key.strip_prefix("wired:disconnect:") {
+            let interface = interface.to_string();
+            self.start_wired_job(format!("Disconnecting wired {interface}…"), move || {
+                wifi::wired_disconnect(&interface)
+            })?;
+            return Ok(Some(true));
+        }
+        if key == "wired:refresh" {
+            self.start_wired_job("Refreshing wired network…".into(), || Ok(()))?;
+            return Ok(Some(true));
+        }
+        Ok(None)
     }
 
     /// Handle a Wi-Fi row. `None` means this was not a Wi-Fi action.
@@ -5003,6 +5300,11 @@ impl Ui {
                 .as_ref()
                 .map(wifi_items)
                 .unwrap_or_else(|| wifi_items(&wifi::snapshot(false))),
+            "wired" => self
+                .wired
+                .as_ref()
+                .map(wired_items)
+                .unwrap_or_else(|| wired_items(&wifi::wired_snapshot())),
             "keys" => shortcut_items(),
             "settings" => settings_items(),
             "themes" => theme_items(),
@@ -5033,6 +5335,9 @@ impl Ui {
     fn switch_mode(&mut self, mode: &str) -> Result<()> {
         if mode == "wifi" {
             return self.enter_wifi();
+        }
+        if mode == "wired" {
+            return self.enter_wired();
         }
         if mode == "sound" {
             return self.enter_sound();
@@ -5068,6 +5373,11 @@ impl Ui {
         }
         if self.mode == "wifi" {
             if let Some(keep) = self.wifi_execute(key)? {
+                return Ok(keep);
+            }
+        }
+        if self.mode == "wired" {
+            if let Some(keep) = self.wired_execute(key)? {
                 return Ok(keep);
             }
         }
@@ -5275,6 +5585,9 @@ impl Ui {
             if self.wifi_rx.is_some() && self.poll_wifi()? {
                 continue;
             }
+            if self.wired_rx.is_some() && self.poll_wired()? {
+                continue;
+            }
             if self.sound_rx.is_some() && self.poll_sound()? {
                 continue;
             }
@@ -5285,6 +5598,7 @@ impl Ui {
                 Some(event) => event,
                 None => {
                     if self.wifi_rx.is_some()
+                        || self.wired_rx.is_some()
                         || self.sound_rx.is_some()
                         || self.sound_test_rx.is_some()
                     {
@@ -5350,13 +5664,23 @@ impl Ui {
                             self.draw()?;
                             true
                         }
-                        0xff52 | 0xff55 | 0xff50 => {
+                        0xff52 | 0xff50 => {
                             self.move_selection(-1);
                             self.draw()?;
                             true
                         }
-                        0xff54 | 0xff56 | 0xff57 => {
+                        0xff54 | 0xff57 => {
                             self.move_selection(1);
+                            self.draw()?;
+                            true
+                        }
+                        0xff55 => {
+                            self.move_selection(-(self.rows.max(1) as i32));
+                            self.draw()?;
+                            true
+                        }
+                        0xff56 => {
+                            self.move_selection(self.rows.max(1) as i32);
                             self.draw()?;
                             true
                         }
@@ -5389,7 +5713,13 @@ impl Ui {
                 }
                 Event::ButtonPress(e) => {
                     if e.event == self.win {
-                        if let Some(line) = self.row_at(e.event_y) {
+                        if matches!(e.detail, 4 | 6) {
+                            self.move_selection(-1);
+                            self.draw()?;
+                        } else if matches!(e.detail, 5 | 7) {
+                            self.move_selection(1);
+                            self.draw()?;
+                        } else if let Some(line) = self.row_at(e.event_y) {
                             self.selected = line;
                             if !self.activate()? {
                                 self.close()?;
@@ -5694,10 +6024,18 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
+        "--wired-status" => {
+            let snapshot = wifi::wired_snapshot();
+            serde_json::to_string_pretty(&snapshot)
+                .map(|text| println!("{text}"))
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+                .map(|_| ())
+        }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview" | "--quick"
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
-        | "--sound" | "--clip" | "--health" | "--agent" | "--share" | "--share-pair" => {
+        | "--wired" | "--sound" | "--clip" | "--health" | "--agent" | "--share"
+        | "--share-pair" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -5718,6 +6056,7 @@ fn main() {
                 "--timing" => "timing",
                 "--input" => "input",
                 "--wifi" => "wifi",
+                "--wired" => "wired",
                 "--sound" => "sound",
                 "--clip" => "clip",
                 "--health" => "health",
@@ -5730,7 +6069,7 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--sound|--clip|--health|--wifi-status|--wifi-scan|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
@@ -6447,6 +6786,7 @@ mod intent_launcher_tests {
         agent_command, filtered_for_mode, intent, intent_first_order, intent_item, intent_items,
         savable_argv, Action, Config, Target,
     };
+    use crate::wifi;
 
     #[test]
     fn intent_rows_rank_before_ordinary_results_and_empty_keeps_order() {
@@ -6555,6 +6895,61 @@ mod intent_launcher_tests {
             restart.target,
             Target::Confirm(Action::UpdateReboot)
         ));
+    }
+
+    #[test]
+    fn wired_rows_offer_only_per_interface_actions() {
+        let snapshot = wifi::WiredSnapshot {
+            available: true,
+            manager: "NetworkManager".into(),
+            devices: vec![
+                wifi::WiredDevice {
+                    interface: "enp1s0".into(),
+                    state: "connected".into(),
+                    connected: true,
+                    carrier: true,
+                    managed: true,
+                    address: "192.0.2.20/24".into(),
+                    connection: "Dock".into(),
+                    speed: Some(1000),
+                },
+                wifi::WiredDevice {
+                    interface: "enp2s0".into(),
+                    state: "unavailable".into(),
+                    carrier: false,
+                    managed: true,
+                    ..Default::default()
+                },
+            ],
+            error: String::new(),
+        };
+        let rows = super::wired_items(&snapshot);
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert!(keys.contains(&"wired:disconnect:enp1s0"));
+        assert!(keys.contains(&"wired:connect:enp2s0"));
+        assert!(!keys
+            .iter()
+            .any(|key| key.contains("wifi") || key.contains("radio")));
+        assert!(rows
+            .iter()
+            .find(|row| row.key == "wired:disconnect:enp1s0")
+            .unwrap()
+            .detail
+            .contains("Wi-Fi stays untouched"));
+        let read_only = wifi::WiredSnapshot {
+            available: true,
+            manager: "read-only (no NetworkManager)".into(),
+            devices: vec![wifi::WiredDevice {
+                interface: "enp1s0".into(),
+                carrier: true,
+                managed: false,
+                ..Default::default()
+            }],
+            error: String::new(),
+        };
+        let rows = super::wired_items(&read_only);
+        assert!(!rows.iter().any(|row| row.key.starts_with("wired:connect:")));
+        assert!(rows.iter().any(|row| row.name.contains("read-only")));
     }
 
     #[test]
