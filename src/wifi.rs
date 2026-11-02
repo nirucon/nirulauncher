@@ -1480,6 +1480,12 @@ fn ethernet_interfaces() -> Vec<String> {
             if entry.path().join("wireless").exists() || entry.path().join("phy80211").exists() {
                 return None;
             }
+            // Docker bridges, veth pairs, bonds and tunnels are also
+            // ARPHRD_ETHER. A physical Ethernet/USB-NIC has a device link;
+            // virtual interfaces do not and are not user wired connections.
+            if !entry.path().join("device").exists() {
+                return None;
+            }
             Some(name)
         })
         .collect::<Vec<_>>();
