@@ -1157,9 +1157,18 @@ fn wired_items(snapshot: &wifi::WiredSnapshot) -> Vec<Item> {
         }
     }
     if snapshot.manager != "NetworkManager" && snapshot.available {
+        let detail = if snapshot.manager.starts_with("dhcpcd") {
+            "dhcpcd configures a connected cable automatically; NIRUX will not change its routes or DHCP"
+        } else {
+            "No NetworkManager here; NIRUX will not change routes, DHCP or another manager"
+        };
         items.push(wifi_info(
-            "Wired is read-only",
-            "No NetworkManager here; NIRUX will not change routes, DHCP or another manager",
+            if snapshot.manager.starts_with("dhcpcd") {
+                "Wired is automatic (dhcpcd)"
+            } else {
+                "Wired is read-only"
+            },
+            detail,
         ));
     }
     if items.is_empty() {

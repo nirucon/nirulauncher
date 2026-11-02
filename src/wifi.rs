@@ -1626,9 +1626,14 @@ pub fn wired_snapshot() -> WiredSnapshot {
             }
         })
         .collect();
+    let manager = if Path::new("/usr/sbin/dhcpcd").exists() || Path::new("/sbin/dhcpcd").exists() {
+        "dhcpcd (automatic)"
+    } else {
+        "read-only (no NetworkManager)"
+    };
     WiredSnapshot {
         available: true,
-        manager: "read-only (no NetworkManager)".into(),
+        manager: manager.into(),
         devices,
         error: String::new(),
     }
