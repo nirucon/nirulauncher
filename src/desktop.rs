@@ -161,7 +161,13 @@ pub fn parse_exec(exec: &str) -> Option<Vec<String>> {
     }
 }
 
-fn field_codes(argv: Vec<String>, name: &str, icon: &str, path: &str) -> Vec<String> {
+fn field_codes(
+    argv: Vec<String>,
+    name: &str,
+    icon: &str,
+    desktop_path: &Path,
+    cwd: &str,
+) -> Vec<String> {
     let mut out = Vec::new();
     for arg in argv {
         if arg.contains("%i") {
@@ -181,8 +187,14 @@ fn field_codes(argv: Vec<String>, name: &str, icon: &str, path: &str) -> Vec<Str
             match chars.next() {
                 Some('%') => replaced.push('%'),
                 Some('c') => replaced.push_str(name),
-                Some('k') => replaced.push_str(path),
-                Some('f' | 'F' | 'u' | 'U' | 'd' | 'D' | 'n' | 'N' | 'v' | 'm') => {}
+                Some('k') => replaced.push_str(&desktop_path.display().to_string()),
+                // `%d` is deprecated but still means the working directory.
+                Some('d') => {
+                    if !cwd.is_empty() {
+                        replaced.push_str(cwd);
+                    }
+                }
+                Some('f' | 'F' | 'u' | 'U' | 'n' | 'N' | 'v' | 'm') => {}
                 Some(other) => {
                     replaced.push('%');
                     replaced.push(other);
@@ -197,7 +209,7 @@ fn field_codes(argv: Vec<String>, name: &str, icon: &str, path: &str) -> Vec<Str
     out
 }
 
-pub fn app_from_text(id: &str, text: &str) -> Option<App> {
+pub fn app_from_source(id: &str, text: &str, source: &Path) -> Option<App> {
     let values = section_value(text);
     if !desktop_allows(&values) {
         return None;
@@ -213,7 +225,7 @@ pub fn app_from_text(id: &str, text: &str) -> Option<App> {
     let path_value = values.get("Path").map(String::as_str).unwrap_or("");
     let path = (!path_value.is_empty() && Path::new(path_value).is_dir())
         .then(|| PathBuf::from(path_value));
-    let argv = field_codes(raw, &name, icon, path_value);
+    let argv = field_codes(raw, &name, icon, source, path_value);
     let mut keywords = Vec::new();
     for key in ["Keywords", "GenericName", "Comment"] {
         if let Some(value) = values.get(key) {
@@ -235,40 +247,74 @@ pub fn app_from_text(id: &str, text: &str) -> Option<App> {
     })
 }
 
+#[allow(dead_code)]
+pub fn app_from_text(id: &str, text: &str) -> Option<App> {
+    app_from_source(id, text, Path::new(id))
+}
+
+fn scan_dir(
+    dir: &Path,
+    prefix: &str,
+    seen: &mut std::collections::HashSet<String>,
+    apps: &mut Vec<App>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
+        let Ok(file_type) = std::fs::symlink_metadata(&path).map(|m| m.file_type()) else {
+            continue;
+        };
+        // Do not follow directory symlinks: an applications directory must not
+        // turn discovery into an unbounded walk.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let relative = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if relative.is_empty() {
+            continue;
+        }
+        let id = if prefix.is_empty() {
+            relative.clone()
+        } else {
+            format!("{prefix}/{relative}")
+        };
+        if file_type.is_dir() {
+            scan_dir(&path, &id, seen, apps);
+            continue;
+        }
+        if path.extension().and_then(|x| x.to_str()) != Some("desktop") {
+            continue;
+        }
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if metadata.len() > 512 * 1024 {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(app) = app_from_source(&id, &text, &path) {
+            apps.push(app);
+        }
+    }
+}
+
 /// Scan all application directories, keeping the first ID in XDG precedence.
 pub fn discover() -> Vec<App> {
     let mut seen = std::collections::HashSet::new();
     let mut apps = Vec::new();
     for dir in data_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut paths: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("desktop"))
-            .collect();
-        paths.sort();
-        for path in paths {
-            let Some(id) = path.file_name().map(|s| s.to_string_lossy().to_string()) else {
-                continue;
-            };
-            if !seen.insert(id.clone()) {
-                continue;
-            }
-            let Ok(metadata) = std::fs::metadata(&path) else {
-                continue;
-            };
-            if metadata.len() > 512 * 1024 {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if let Some(app) = app_from_text(&id, &text) {
-                apps.push(app);
-            }
-        }
+        scan_dir(&dir, "", &mut seen, &mut apps);
     }
     apps.sort_by_key(|a| a.name.to_lowercase());
     apps
@@ -322,15 +368,22 @@ mod tests {
                 "%U"
             ]
         );
-        let app = app_from_text(
+        let app = app_from_source(
             "x.desktop",
             "[Desktop Entry]\nType=Application\nName=Fish & Chips\nExec=/bin/app %c %k %i %f\nIcon=fish\nPath=/\n",
+            Path::new("/usr/share/applications/x.desktop"),
         )
         .unwrap();
         assert_eq!(app.name, "Fish & Chips");
         assert_eq!(
             app.argv,
-            vec!["/bin/app", "Fish & Chips", "/", "--icon", "fish"]
+            vec![
+                "/bin/app",
+                "Fish & Chips",
+                "/usr/share/applications/x.desktop",
+                "--icon",
+                "fish"
+            ]
         );
         assert_eq!(app.path.as_deref(), Some(Path::new("/")));
     }

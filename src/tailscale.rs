@@ -11,10 +11,13 @@ pub struct Peer {
 }
 
 pub fn peers() -> Result<Vec<Peer>, String> {
-    let output = Command::new("tailscale")
-        .args(["status", "--json"])
+    let output = Command::new("timeout")
+        .args(["-k", "0.2", "0.5", "tailscale", "status", "--json"])
         .output()
         .map_err(|error| format!("tailscale is not available: {error}"))?;
+    if output.status.code() == Some(124) {
+        return Err("tailscale status did not respond within 500 ms".into());
+    }
     if !output.status.success() {
         return Err("tailscale is not running or not logged in".into());
     }

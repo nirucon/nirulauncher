@@ -150,6 +150,7 @@ struct Ui {
     error: String,
     selection: Atom,
     activate: Atom,
+    lock_request: Atom,
     /// True when the window was opened for a web search (`--search`).
     web_mode: bool,
     /// The current view, so an ordered list can keep its intended order.
@@ -181,6 +182,27 @@ struct Ui {
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
     Ok(c.intern_atom(false, name.as_bytes())?.reply()?.atom)
+}
+
+/// Provider queries in a view switch must not own the UI indefinitely.
+///
+/// GNU timeout bounds the child and its output wait; a provider that hangs is
+/// shown as an unavailable row instead of freezing Escape and the lock handoff.
+fn bounded_output(
+    program: &str,
+    args: &[&str],
+    budget: std::time::Duration,
+) -> Option<std::process::Output> {
+    let limit = format!("{:.2}", budget.as_secs_f64());
+    let result = std::process::Command::new("timeout")
+        .args(["-k", "0.2", &limit, program])
+        .args(args)
+        .output()
+        .ok();
+    match result {
+        Some(output) if output.status.code() == Some(124) => None,
+        other => other,
+    }
 }
 
 fn set_utf8(c: &RustConnection, win: Window, atom: Atom, value: &str) -> Result<()> {
@@ -1615,11 +1637,7 @@ fn quick_items() -> Vec<Item> {
             "quick:dnd",
             "Toggle Do Not Disturb",
             "Suppress notification popups",
-            Target::Spawn {
-                argv: vec!["nirunotify".into(), "--dnd".into(), "toggle".into()],
-                terminal: false,
-                path: None,
-            },
+            spawn_niructl(&["dnd", "toggle"]),
         ),
         item(
             "quick:nightlight",
@@ -1656,13 +1674,14 @@ fn quick_items() -> Vec<Item> {
 
 fn bluetooth_items() -> Vec<Item> {
     let mut items = Vec::new();
-    let Ok(output) = Command::new("niructl")
-        .args(["bluetooth", "status"])
-        .output()
-    else {
+    let Some(output) = bounded_output(
+        "niructl",
+        &["bluetooth", "status"],
+        std::time::Duration::from_millis(250),
+    ) else {
         return vec![bluetooth_info(
             "Bluetooth unavailable",
-            "niructl did not respond",
+            "niructl did not respond within 250 ms",
         )];
     };
     if !output.status.success() {
@@ -2175,7 +2194,11 @@ fn display_items() -> Vec<Item> {
             },
         });
     }
-    if let Ok(output) = Command::new("niructl").args(["display", "list"]).output() {
+    if let Some(output) = bounded_output(
+        "niructl",
+        &["display", "list"],
+        std::time::Duration::from_millis(250),
+    ) {
         if output.status.success() {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 let fields: Vec<&str> = line.split('\t').collect();
@@ -2215,7 +2238,11 @@ fn display_items() -> Vec<Item> {
         favorite: false,
         target: Target::Info,
     });
-    if let Ok(output) = Command::new("niructl").args(["monitors"]).output() {
+    if let Some(output) = bounded_output(
+        "niructl",
+        &["monitors"],
+        std::time::Duration::from_millis(250),
+    ) {
         if output.status.success() {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 let fields: Vec<&str> = line.split_whitespace().collect();
@@ -2239,10 +2266,11 @@ fn display_items() -> Vec<Item> {
             }
         }
     }
-    if let Ok(output) = Command::new("niructl")
-        .args(["display", "status", "--json"])
-        .output()
-    {
+    if let Some(output) = bounded_output(
+        "niructl",
+        &["display", "status", "--json"],
+        std::time::Duration::from_millis(250),
+    ) {
         let token = serde_json::from_slice::<serde_json::Value>(&output.stdout)
             .ok()
             .and_then(|state| {
@@ -2425,7 +2453,11 @@ fn theme_items() -> Vec<Item> {
         });
     }
     let mut catalog = None;
-    if let Ok(output) = Command::new("niructl").args(["theme-catalog"]).output() {
+    if let Some(output) = bounded_output(
+        "niructl",
+        &["theme-catalog"],
+        std::time::Duration::from_millis(250),
+    ) {
         if output.status.success() {
             catalog = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
         }
@@ -2499,7 +2531,7 @@ fn theme_items() -> Vec<Item> {
 /// invents a second truth that can drift from the window manager.
 fn shortcut_items() -> Vec<Item> {
     let mut shortcuts: Vec<(String, Vec<String>)> = Vec::new();
-    if let Ok(out) = Command::new("niructl").arg("keys").output() {
+    if let Some(out) = bounded_output("niructl", &["keys"], std::time::Duration::from_millis(250)) {
         if out.status.success() {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 let Some((key, action)) = line.split_once('\t') else {
@@ -4101,6 +4133,7 @@ impl Ui {
         )?;
         let selection = intern(&c, "_NIRULANCHER_SELECTION")?;
         let activate = intern(&c, "_NIRULANCHER_ACTIVATE")?;
+        let lock_request = intern(&c, "_NIRULANCHER_LOCK")?;
         let owner = c.get_selection_owner(selection)?.reply()?.owner;
         if owner != x11rb::NONE {
             let _ = c.send_event(
@@ -4180,6 +4213,7 @@ impl Ui {
             error: String::new(),
             selection,
             activate,
+            lock_request,
             web_mode,
             mode: mode.to_string(),
             catalog,
@@ -5741,6 +5775,12 @@ impl Ui {
                     }
                 }
                 Event::Expose(_) => self.draw()?,
+                Event::ClientMessage(e) if e.type_ == self.lock_request => {
+                    // The lock screen cannot release another client's active
+                    // grab. Close this overlay so NIRULOCK can take over input.
+                    self.close()?;
+                    return Ok(());
+                }
                 Event::ClientMessage(e) if e.type_ == self.activate => {
                     let _ = self.c.configure_window(
                         self.win,
