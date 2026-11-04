@@ -6,7 +6,7 @@
    `tests/ui-smoke.sh`. The audit baseline is `209d736` (0.2.78, pinned by NIRUX 0.12.199).
    Revalidate each item against current HEAD and skip items that are already fixed,
    noting that you did.
-2. Implement **N1–N6, then U1–U4, and R1 last**. Commit per item. Keep `cargo fmt --check`,
+2. Implement **N1–N6, then U1–U5, and R1 last**. Commit per item. Keep `cargo fmt --check`,
    `clippy -D warnings`, tests, `tests/ui-smoke.sh` and `tests/theme-colors.sh` green.
 3. Pass the gates in §4, release in §5 and report in §6.
 
@@ -111,6 +111,38 @@ After everything above is green, move code into modules **without changing behav
 
 Out of scope: a plugin system, network indexing, clipboard history, and new modes.
 
+### U5: Event and per-app notification sounds in the Sound view
+NIRUX `main` (`ef7a500`, shipped in the first suite release after 0.12.202) adds per-app
+notification sounds and a machine-readable status. The Sound view (`--sound`) has no
+event-sound section today. Add one that uses only `nirux sounds`. It owns no config of
+its own and parses no TOML:
+- Read the state with `nirux sounds status --json`, schema 1:
+  `{"enabled","volume","config","events":{startup,notification,update,shutdown},
+  "exclude":[…],"apps":[{"app","sound","state":"ok|missing|silent|default","file"}]}`.
+  Run it once per open on the bounded provider pattern (N2), and treat a missing `nirux`
+  or an older NIRUX without `--json` as "Event sounds unavailable".
+- Rows:
+  - **Event sounds on/off** (`nirux sounds on|off`).
+  - One toggle per event (`nirux sounds toggle EVENT`).
+  - **Test** per event (`nirux sounds test EVENT`).
+  - Per app: "Thunderbird → mail" or "Signal → chat", with the state shown as ok,
+    missing (falls back to the notification sound), silent or default.
+  - Per-app actions: choose a sound (a list built from the `*.ogg` names in the NIRUX
+    sounds dir and `~/.config/nirux/sounds/`, plus *Default* and *Off*), **Test**
+    (`nirux sounds test notification --app APP`) and **Remove**
+    (`nirux sounds app APP remove`).
+  - **Add app…**: suggest app names seen in `nirunotify --history` (column 2, unique,
+    most recent first) that have no entry yet, and also accept free text. Validate with
+    the same rules as `nirux sounds app`: letters, digits, `.`, `_` and `-`.
+- Run every change with argv only (`nirux sounds app APP SOUND`), off the UI thread, then
+  re-read the JSON. Never run a shell.
+- Volume is display-only here unless `nirux` gains a setter. Do not edit `sounds.toml`.
+
+**Done when:** a fake `nirux` on PATH (JSON fixture + an argv log) drives tests for
+rendering, every action's argv, an older NIRUX without `--json`, and invalid app names.
+Natively on niruxwork, Thunderbird and Signal show their sounds, Test plays them, and
+changes show up in `nirux sounds status`. Restore the owner's mappings afterwards.
+
 ## 4. Gates
 
 Automated:
@@ -149,7 +181,7 @@ Install through `nirux update` and verify the running version.
 
 ## 6. Final report
 
-For each item N1–N6, U1–U4 and R1: the change, the tests and the evidence (open times and
+For each item N1–N6, U1–U5 and R1: the change, the tests and the evidence (open times and
 spawn counts per mode before and after, `main.rs` line count before and after). Include
 release URLs, installed versions and remaining limits. Mark anything unfinished as
 **PARTIAL** and give the exact remaining steps.
