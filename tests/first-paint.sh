@@ -37,7 +37,7 @@ PROVIDER
   chmod +x "$T/bin/$name"
 done
 
-Xvfb :97 -screen 0 1280x800x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+Xvfb :97 -screen 0 1280x800x24 -nolisten tcp -noreset >"$T/xvfb.log" 2>&1 &
 XVFB_PID=$!
 i=0
 while [ ! -S /tmp/.X11-unix/X97 ]; do
@@ -65,13 +65,14 @@ for mode in apps actions system-actions health displays keys themes timing \
   [ "$mapped" -le "$BUDGET_MS" ] || fail "$mode: first paint after ${mapped} ms (budget ${BUDGET_MS} ms)"
   start=$(now_ms)
   xdotool key Escape
-  while kill -0 "$LAUNCHER" 2>/dev/null; do
+  # The window going away is the close; the process may linger as a zombie
+  # until this shell waits for it.
+  while [ -n "$(window)" ]; do
     [ $(($(now_ms) - start)) -lt 500 ] || fail "$mode: Escape did not close while providers were loading"
   done
   wait "$LAUNCHER" 2>/dev/null || :
   LAUNCHER=""
   echo "PASS $mode: mapped in ${mapped} ms with 2 s providers"
-  while [ -n "$(window)" ]; do sleep 0.02; done
 done
 
 # Enter typed before the provider rows arrive acts on the best match once

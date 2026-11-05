@@ -13,7 +13,7 @@ cleanup() {
   rm -rf "$T"
 }
 trap cleanup EXIT INT TERM
-Xvfb :92 -screen 0 800x600x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+Xvfb :92 -screen 0 800x600x24 -nolisten tcp -noreset >"$T/xvfb.log" 2>&1 &
 XVFB=$!
 i=0
 while [ ! -S /tmp/.X11-unix/X92 ]; do

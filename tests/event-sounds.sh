@@ -50,7 +50,7 @@ exit 1
 CTL
 chmod +x "$T/bin/nirux" "$T/bin/nirunotify" "$T/bin/niructl"
 
-Xvfb :96 -screen 0 1280x800x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+Xvfb :96 -screen 0 1280x800x24 -nolisten tcp -noreset >"$T/xvfb.log" 2>&1 &
 XVFB_PID=$!
 i=0
 while [ ! -S /tmp/.X11-unix/X96 ]; do

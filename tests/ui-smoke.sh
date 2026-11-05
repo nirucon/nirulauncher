@@ -34,7 +34,7 @@ Name=Layout fixture $fixture
 Exec=$T/fakeapp $fixture
 DESKTOP
 done
-Xvfb :98 -screen 0 1280x800x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+Xvfb :98 -screen 0 1280x800x24 -nolisten tcp -noreset >"$T/xvfb.log" 2>&1 &
 XVFB_PID=$!
 i=0
 while [ ! -S /tmp/.X11-unix/X98 ]; do

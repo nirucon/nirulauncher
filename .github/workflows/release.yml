@@ -21,6 +21,7 @@ jobs:
       # The environment tests share HOME and PATH; one thread is deterministic.
       - run: cargo test --locked -- --test-threads=1
       - run: xvfb-run -a cargo test --locked focus_waits_for_window_manager_mapping -- --ignored --test-threads=1
+      - run: xvfb-run -a cargo test --locked --test lock_handoff -- --ignored --test-threads=1
       - run: cargo build --release --locked --target x86_64-unknown-linux-musl
       - name: Verify release identity
         run: |
