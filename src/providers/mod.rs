@@ -8,6 +8,7 @@
 
 pub(crate) mod eventsound;
 pub(crate) mod sound;
+pub(crate) mod system;
 pub(crate) mod tailscale;
 pub(crate) mod wifi;
 
