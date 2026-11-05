@@ -164,6 +164,35 @@ grep -qxF 'audio source 67' "$ARGS_FILE"
 wait "$LAUNCHER"
 LAUNCHER=""
 
+# Calculator: an arithmetic query shows "= 8" first; Enter copies 8 through
+# xclip's stdin (never argv) and closes the launcher.
+cat > "$T/bin/xclip" <<'CLIP'
+#!/bin/sh
+printf '%s\n' "$*" > "$ARGS_FILE.argv"
+cat > "$ARGS_FILE"
+CLIP
+chmod +x "$T/bin/xclip"
+rm -f "$ARGS_FILE" "$ARGS_FILE.argv"
+"$BIN" --apps >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo 'FAIL calculator view'; exit 1; }
+  sleep 0.05
+done
+xdotool type --delay 20 '2+2*3'
+xdotool key Return
+i=0
+while [ ! -s "$ARGS_FILE" ]; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL calculator did not copy'; exit 1; }
+  sleep 0.05
+done
+[ "$(cat "$ARGS_FILE")" = 8 ] || { echo "FAIL calculator copied $(cat "$ARGS_FILE")"; exit 1; }
+grep -qxF -- '-selection clipboard -in' "$ARGS_FILE.argv" || { echo 'FAIL xclip argv'; exit 1; }
+wait "$LAUNCHER"
+LAUNCHER=""
+rm -f "$T/bin/xclip" "$ARGS_FILE" "$ARGS_FILE.argv"
+
 # Web search: a phrase opens the configured browser with the engine's own
 # address, and Tab moves to the next engine before Enter is pressed.
 cat > "$T/bin/fakebrowser" <<'BROWSER'

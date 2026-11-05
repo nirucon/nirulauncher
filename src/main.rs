@@ -4,6 +4,7 @@
 //! and no shell: applications are started from argv arrays parsed from their
 //! desktop entries.
 
+mod calc;
 mod compose;
 mod config;
 mod desktop;
@@ -73,6 +74,8 @@ enum Target {
     Mode(String),
     /// Run an explicit microphone test and show the result in the sound panel.
     SoundTest(u64),
+    /// Copy this text to the clipboard through `xclip`.
+    Copy(String),
     Info,
 }
 
@@ -108,6 +111,7 @@ impl Item {
             Target::Confirm(_) => "confirm",
             Target::Mode(_) => "mode",
             Target::SoundTest(_) => "sound-test",
+            Target::Copy(_) => "copy",
             Target::Info => "info",
         }
     }
@@ -5714,7 +5718,11 @@ impl Ui {
         let intent_rows = if matches!(self.mode.as_str(), "apps" | "actions" | "system-actions")
             && !self.query.trim().is_empty()
         {
-            intent_items(&self.query)
+            // An arithmetic query gets its result as the first row.
+            calc_row(&self.query)
+                .into_iter()
+                .chain(intent_items(&self.query))
+                .collect()
         } else {
             Vec::new()
         };
@@ -5940,6 +5948,14 @@ impl Ui {
                 Ok(true)
             }
             Target::Info => Ok(true),
+            Target::Copy(text) => match copy_to_clipboard(&text) {
+                Ok(()) => Ok(false),
+                Err(e) => {
+                    self.error = e;
+                    self.draw()?;
+                    Ok(true)
+                }
+            },
             Target::Terminal { argv, hold } => {
                 match spawn_terminal_command(&argv, hold, &self.cfg) {
                     Ok(()) => {
@@ -6319,9 +6335,42 @@ fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str>
         Target::Confirm(_) => Err("Confirmation actions are built in and cannot be saved"),
         Target::Mode(_) => Err("View switches cannot be saved as actions"),
         Target::SoundTest(_) => Err("Microphone tests cannot be saved as actions"),
+        Target::Copy(_) => Err("Calculator results cannot be saved as actions"),
         Target::Info => Err("Info rows cannot be saved as actions"),
         Target::Focus(_) => Err("Window switches cannot be saved as actions"),
     }
+}
+
+/// The `=` row for an arithmetic query, if the query is one.
+fn calc_row(query: &str) -> Option<Item> {
+    let value = calc::format(calc::evaluate(query)?);
+    Some(Item {
+        key: "calc:result".into(),
+        group: String::new(),
+        name: format!("= {value}"),
+        detail: "Enter copies the result".into(),
+        keywords: String::new(),
+        favorite: false,
+        target: Target::Copy(value),
+    })
+}
+
+/// Hand text to `xclip`, which keeps serving the clipboard after the
+/// launcher exits. argv only; the text goes through stdin.
+fn copy_to_clipboard(text: &str) -> std::result::Result<(), String> {
+    use std::io::Write;
+    let mut child = Command::new("xclip")
+        .args(["-selection", "clipboard", "-in"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot start xclip: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("xclip has no input")?;
+    stdin
+        .write_all(text.as_bytes())
+        .map_err(|e| format!("cannot copy: {e}"))?;
+    Ok(())
 }
 
 fn spawn_command(
