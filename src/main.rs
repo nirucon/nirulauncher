@@ -586,7 +586,7 @@ fn event_row(key: String, name: String, detail: String, target: Target) -> Item 
         group: "Event sounds".into(),
         name,
         detail,
-        keywords: "sound sounds event notification app per-app mail chat test".into(),
+        keywords: "sound sounds event".into(),
         favorite: false,
         target,
     }
@@ -5413,7 +5413,15 @@ impl Ui {
         self.sound_busy = None;
         match result {
             Ok(snapshot) => self.sound = Some(snapshot),
-            Err(error) => self.error = error,
+            // Say why instead of leaving "Loading audio…" up for good.
+            Err(error) => {
+                self.sound = Some(sound::Snapshot {
+                    available: false,
+                    reason: Some(error.clone()),
+                    ..Default::default()
+                });
+                self.error = error;
+            }
         }
         self.refresh_sound_items();
         self.draw()?;
