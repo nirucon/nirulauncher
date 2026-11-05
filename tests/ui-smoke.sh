@@ -31,7 +31,7 @@ for fixture in one two; do
 [Desktop Entry]
 Type=Application
 Name=Layout fixture $fixture
-Exec=$T/fakeapp
+Exec=$T/fakeapp $fixture
 DESKTOP
 done
 Xvfb :98 -screen 0 1280x800x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
@@ -80,6 +80,29 @@ while kill -0 "$LAUNCHER" 2>/dev/null; do
   sleep 0.05
 done
 LAUNCHER=""
+# Paging: End selects the last row and Home the first; Ctrl+Backspace
+# deletes the last word of the query.
+"$BIN" --apps >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo "FAIL paging launcher did not map"; exit 1; }
+  sleep 0.05
+done
+sleep 0.3
+xdotool type --delay 20 'fixture zzz'
+xdotool key ctrl+BackSpace
+xdotool key End Home End
+xdotool key Return
+i=0
+while kill -0 "$LAUNCHER" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo "FAIL paging launch did not exit"; exit 1; }
+  sleep 0.05
+done
+LAUNCHER=""
+# "fixture" matches the two layout fixtures; End picks the second one.
+[ "$(cat "$T/args" 2>/dev/null)" = two ] || { echo "FAIL End did not select the last fixture: $(cat "$T/args" 2>/dev/null)"; exit 1; }
+rm -f "$T/args"
 # Dead keys compose in the search field: dead_acute then e is é, which finds
 # "Café Écran" ahead of every row that only matches a folded e. xdotool maps
 # the dead key onto a spare keycode first, so this also proves the cached

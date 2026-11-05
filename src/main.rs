@@ -6265,17 +6265,21 @@ impl Ui {
                             true
                         }
                         0xff08 => {
-                            self.query.pop();
+                            if e.state.contains(KeyButMask::CONTROL) {
+                                delete_word(&mut self.query);
+                            } else {
+                                self.query.pop();
+                            }
                             self.refilter();
                             self.draw()?;
                             true
                         }
-                        0xff52 | 0xff50 => {
+                        0xff52 => {
                             self.move_selection(-1);
                             self.draw()?;
                             true
                         }
-                        0xff54 | 0xff57 => {
+                        0xff54 => {
                             self.move_selection(1);
                             self.draw()?;
                             true
@@ -6287,6 +6291,17 @@ impl Ui {
                         }
                         0xff56 => {
                             self.move_selection(self.rows.max(1) as i32);
+                            self.draw()?;
+                            true
+                        }
+                        // Home and End jump to the first and last row.
+                        0xff50 => {
+                            self.move_selection(-(self.filtered.len() as i32));
+                            self.draw()?;
+                            true
+                        }
+                        0xff57 => {
+                            self.move_selection(self.filtered.len() as i32);
                             self.draw()?;
                             true
                         }
@@ -6411,6 +6426,19 @@ fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str>
         Target::Info => Err("Info rows cannot be saved as actions"),
         Target::Focus(_) => Err("Window switches cannot be saved as actions"),
     }
+}
+
+/// Ctrl+Backspace: drop the last word and the spaces after it.
+fn delete_word(text: &mut String) {
+    let kept = text.trim_end().len();
+    text.truncate(kept);
+    let word = text
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(index, ch)| index + ch.len_utf8())
+        .unwrap_or(0);
+    text.truncate(word);
 }
 
 /// The empty-query hint after a view's title.
@@ -7034,6 +7062,19 @@ mod input_tests {
             keyboard_symbol(&q, KeyButMask::SHIFT | KeyButMask::MOD5),
             0x51
         );
+    }
+
+    #[test]
+    fn ctrl_backspace_deletes_one_word() {
+        let mut text = String::from("open the café  ");
+        super::delete_word(&mut text);
+        assert_eq!(text, "open the ");
+        super::delete_word(&mut text);
+        assert_eq!(text, "open ");
+        super::delete_word(&mut text);
+        assert_eq!(text, "");
+        super::delete_word(&mut text);
+        assert_eq!(text, "");
     }
 
     #[test]
