@@ -1,9 +1,15 @@
-//! Read-only provider queries, memoized for one launcher process.
+//! Providers: the programs and services the views read, and the memo that
+//! asks each read-only query once per launcher process.
 //!
 //! One open asks each provider once: the Health view and the actions catalog
 //! read the same `niruclip --status --json`, and switching between views must
 //! not ask `niructl` again for what it already answered. Anything that changes
 //! state calls [`forget`] so the next read is fresh.
+
+pub(crate) mod eventsound;
+pub(crate) mod sound;
+pub(crate) mod tailscale;
+pub(crate) mod wifi;
 
 use std::collections::HashMap;
 use std::process::{Command, Output, Stdio};

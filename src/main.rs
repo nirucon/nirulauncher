@@ -8,16 +8,14 @@ mod calc;
 mod compose;
 mod config;
 mod desktop;
-mod eventsound;
 mod intent;
 mod providers;
 mod render;
 mod saved;
-mod sound;
-mod tailscale;
 mod usage;
 mod websearch;
-mod wifi;
+
+use providers::{eventsound, sound, tailscale, wifi};
 
 use config::Config;
 use render::Renderer;
