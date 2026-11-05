@@ -4,6 +4,7 @@
 //! and no shell: applications are started from argv arrays parsed from their
 //! desktop entries.
 
+mod compose;
 mod config;
 mod desktop;
 mod intent;
@@ -192,6 +193,8 @@ struct Ui {
     catalog_favorites: bool,
     /// The user moved the selection, so arriving rows must keep it.
     moved: bool,
+    keymap: Keymap,
+    compose: compose::BuiltinCompose,
 }
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
@@ -3819,35 +3822,40 @@ fn term_rank(
     }
 }
 
-/// The lowercased text of one row that a query is matched against.
+/// The lowercased text of one row that a query is matched against, plus the
+/// same text with diacritics folded (`é` → `e`, `å`/`ä` → `a`).
 struct SearchFields {
-    name: String,
-    label: String,
-    group: String,
-    detail: String,
-    keywords: String,
+    exact: [String; 5],
+    folded: [String; 5],
 }
 
 impl SearchFields {
     fn new(item: &Item) -> Self {
-        Self {
-            name: item.name.to_lowercase(),
-            label: item.label().to_lowercase(),
-            group: item.group.to_lowercase(),
-            detail: item.detail.to_lowercase(),
-            keywords: item.keywords.to_lowercase(),
-        }
+        let exact = [
+            item.name.to_lowercase(),
+            item.label().to_lowercase(),
+            item.group.to_lowercase(),
+            item.detail.to_lowercase(),
+            item.keywords.to_lowercase(),
+        ];
+        let folded = exact.clone().map(|text| compose::fold(&text));
+        Self { exact, folded }
     }
 
+    /// The rank of one lowercase term; lower is better. A match on the exact
+    /// text ranks ahead of the same kind of match that needed folding, so
+    /// `é` finds `é` first, while `e` still finds `é`.
     fn rank(&self, term: &str) -> Option<u8> {
-        term_rank(
-            term,
-            &self.name,
-            &self.label,
-            &self.group,
-            &self.detail,
-            &self.keywords,
-        )
+        let [name, label, group, detail, keywords] = &self.exact;
+        let exact = term_rank(term, name, label, group, detail, keywords).map(|rank| rank * 2);
+        let term = compose::fold(term);
+        let [name, label, group, detail, keywords] = &self.folded;
+        let folded =
+            term_rank(&term, name, label, group, detail, keywords).map(|rank| rank * 2 + 1);
+        match (exact, folded) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 
@@ -4439,6 +4447,7 @@ impl Ui {
         c.set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME)?;
         c.flush()?;
         let usage = load_usage(&cfg);
+        let keymap = Keymap::load(&c);
         let recent_mark = if renderer.covers('↺') { '↺' } else { '+' };
         let filtered = filtered_for_mode(&items, "", &usage, mode);
         let mut ui = Self {
@@ -4469,6 +4478,8 @@ impl Ui {
             catalog_for: mode.to_string(),
             catalog_favorites: true,
             moved: false,
+            keymap,
+            compose: compose::BuiltinCompose::default(),
             items,
             filtered,
             usage,
@@ -5310,7 +5321,7 @@ impl Ui {
                 self.wifi_secret = Some(secret);
             }
             _ if is_text_key(key) => {
-                if let Some(ch) = char::from_u32(key) {
+                if let Some(ch) = key_char(key) {
                     if !ch.is_control() && (secret.hidden && secret.stage == 0 || ch != '\0') {
                         secret.buffer.push(ch);
                     }
@@ -5461,7 +5472,7 @@ impl Ui {
                 self.profile_name = Some(name);
             }
             _ if is_text_key(key) => {
-                if let Some(ch) = char::from_u32(key) {
+                if let Some(ch) = key_char(key) {
                     if !ch.is_control() && (!ch.is_whitespace() || !name.ends_with(' ')) {
                         name.push(ch);
                     }
@@ -5988,7 +5999,20 @@ impl Ui {
             };
             match event {
                 Event::KeyPress(e) => {
-                    let (key, shift) = key_text(&self.c, e.detail, e.state);
+                    let shift = e.state.contains(KeyButMask::SHIFT);
+                    let sym = self.keymap.symbol(e.detail, e.state);
+                    // Dead keys compose with the next key; function keys
+                    // cancel a pending accent and keep their meaning.
+                    let key = if compose::is_function(sym) {
+                        self.compose.reset();
+                        sym
+                    } else {
+                        match self.compose.feed(sym) {
+                            compose::Compose::Pass => sym,
+                            compose::Compose::Composed(ch) => compose::char_keysym(ch),
+                            compose::Compose::Composing | compose::Compose::Cancelled => continue,
+                        }
+                    };
                     if self.wifi_secret.is_some() {
                         self.wifi_secret_key(key)?;
                         continue;
@@ -6079,7 +6103,7 @@ impl Ui {
                         _ => false,
                     };
                     if !handled && is_text_key(key) {
-                        if let Some(ch) = char::from_u32(key) {
+                        if let Some(ch) = key_char(key) {
                             if !ch.is_control() && !ch.is_whitespace() || ch == ' ' {
                                 self.query.push(ch);
                                 self.refilter();
@@ -6109,6 +6133,10 @@ impl Ui {
                     }
                 }
                 Event::Expose(_) => self.draw()?,
+                Event::MappingNotify(e) if e.request != Mapping::POINTER => {
+                    self.keymap = Keymap::load(&self.c);
+                    self.compose.reset();
+                }
                 Event::ClientMessage(e) if e.type_ == self.lock_request => {
                     // The lock screen cannot release another client's active
                     // grab. Close this overlay so NIRULOCK can take over input.
@@ -6274,15 +6302,25 @@ fn spawn_terminal_command(
         .map_err(|e| format!("cannot start {program}: {e}"))
 }
 
-/// Keyboard level: base, Shift, AltGr (MOD5), then Shift+AltGr.
 fn is_text_key(key: u32) -> bool {
-    // Latin-1 printable range covers the launcher's documented input support.
+    // Latin-1 printable range covers the launcher's documented input support,
+    // plus Unicode keysyms for composed letters outside Latin-1 (Ÿ).
     // Modifier and function keysyms (0xfe00+) are never search text; 0xffe3
     // (Control_L) is also the printable U+FFE3 character, which caused Ctrl to
     // clear the menu.
-    (0x20..=0xff).contains(&key)
+    (0x20..=0xff).contains(&key) || (0x0100_0100..=0x0110_ffff).contains(&key)
 }
 
+/// The text of a key the handlers accept as text.
+fn key_char(key: u32) -> Option<char> {
+    if is_text_key(key) {
+        compose::keysym_char(key)
+    } else {
+        None
+    }
+}
+
+/// Keyboard level: base, Shift, AltGr (MOD5), then Shift+AltGr.
 fn keyboard_level(state: KeyButMask) -> usize {
     let shift = state.contains(KeyButMask::SHIFT);
     let altgr = state.contains(KeyButMask::MOD5);
@@ -6308,29 +6346,75 @@ fn apply_caps(sym: u32, lock: bool) -> u32 {
     sym
 }
 
+/// Pick a keycode's keysym for a modifier state.
+///
+/// An XKB server's core map lists group 1 as base and Shift at 0 and 1, the
+/// second group at 2 and 3, and group 1's AltGr levels at 4 and 5 (`2
+/// quotedbl 2 quotedbl at twosuperior` on the Swedish layout). A plain
+/// four-column core map keeps AltGr at 2 and 3. A level the key does not have
+/// gives its base level, as XKB does for keys without an AltGr symbol.
 fn keyboard_symbol(syms: &[u32], state: KeyButMask) -> u32 {
     let level = keyboard_level(state);
-    let sym = syms
-        .get(level)
-        .or_else(|| syms.get(level % 2))
-        .or_else(|| syms.first())
-        .copied()
-        .unwrap_or(0);
+    let index = if level >= 2 && syms.len() > 4 {
+        level + 2
+    } else {
+        level
+    };
+    let mut sym = syms.get(index).copied().unwrap_or(0);
+    if sym == 0 || sym == 0xfe03 {
+        sym = syms
+            .get(level % 2)
+            .copied()
+            .filter(|sym| *sym != 0)
+            .or_else(|| syms.first().copied())
+            .unwrap_or(0);
+    }
     apply_caps(sym, state.contains(KeyButMask::LOCK))
 }
 
-fn key_text(c: &RustConnection, keycode: u8, state: KeyButMask) -> (u32, bool) {
-    let shift = state.contains(KeyButMask::SHIFT);
-    let Ok(map) = c
-        .get_keyboard_mapping(keycode, 1)
-        .ok()
-        .and_then(|r| r.reply().ok())
-        .ok_or(())
-    else {
-        return (0, shift);
-    };
-    let _ = map.keysyms_per_keycode;
-    (keyboard_symbol(&map.keysyms, state), shift)
+/// The core keyboard map, fetched once and again after `MappingNotify`
+/// instead of one round trip per key press.
+struct Keymap {
+    min_keycode: u8,
+    per_keycode: usize,
+    keysyms: Vec<u32>,
+}
+
+impl Keymap {
+    fn load(c: &RustConnection) -> Self {
+        let min_keycode = c.setup().min_keycode;
+        let max_keycode = c.setup().max_keycode;
+        let reply = c
+            .get_keyboard_mapping(min_keycode, max_keycode.saturating_sub(min_keycode) + 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok());
+        match reply {
+            Some(reply) => Self {
+                min_keycode,
+                per_keycode: usize::from(reply.keysyms_per_keycode),
+                keysyms: reply.keysyms,
+            },
+            None => Self {
+                min_keycode,
+                per_keycode: 0,
+                keysyms: Vec::new(),
+            },
+        }
+    }
+
+    fn keysyms(&self, keycode: u8) -> &[u32] {
+        let Some(index) = keycode.checked_sub(self.min_keycode) else {
+            return &[];
+        };
+        let start = usize::from(index) * self.per_keycode;
+        self.keysyms
+            .get(start..start + self.per_keycode)
+            .unwrap_or(&[])
+    }
+
+    fn symbol(&self, keycode: u8, state: KeyButMask) -> u32 {
+        keyboard_symbol(self.keysyms(keycode), state)
+    }
 }
 
 fn main() {
@@ -6656,6 +6740,48 @@ mod input_tests {
     }
 
     #[test]
+    fn altgr_uses_the_xkb_core_columns() {
+        // othala, setxkbmap se: `2 quotedbl 2 quotedbl at twosuperior at`.
+        let two = [0x32, 0x22, 0x32, 0x22, 0x40, 0xb2, 0x40];
+        assert_eq!(keyboard_symbol(&two, KeyButMask::default()), 0x32);
+        assert_eq!(keyboard_symbol(&two, KeyButMask::SHIFT), 0x22);
+        assert_eq!(
+            keyboard_symbol(&two, KeyButMask::MOD5),
+            0x40,
+            "AltGr+2 is @"
+        );
+        assert_eq!(
+            keyboard_symbol(&two, KeyButMask::SHIFT | KeyButMask::MOD5),
+            0xb2
+        );
+        // `e E e E EuroSign cent EuroSign`.
+        let e = [0x65, 0x45, 0x65, 0x45, 0x20ac, 0xa2, 0x20ac];
+        assert_eq!(keyboard_symbol(&e, KeyButMask::MOD5), 0x20ac);
+        // AltGr+ä gives the dead diaeresis; ¨ composes from there.
+        let diaeresis = [0xfe57, 0xfe52, 0xfe57, 0xfe52, 0xfe53, 0xfe5a, 0xfe53];
+        assert_eq!(keyboard_symbol(&diaeresis, KeyButMask::MOD5), 0xfe53);
+        // A key without an AltGr level gives its base level, not nothing.
+        let q = [0x71, 0x51, 0x71, 0x51, 0, 0, 0];
+        assert_eq!(keyboard_symbol(&q, KeyButMask::MOD5), 0x71);
+        assert_eq!(
+            keyboard_symbol(&q, KeyButMask::SHIFT | KeyButMask::MOD5),
+            0x51
+        );
+    }
+
+    #[test]
+    fn composed_and_unicode_letters_are_text() {
+        assert_eq!(super::key_char(0xe9), Some('é'));
+        assert_eq!(super::key_char(0x0100_0178), Some('Ÿ'));
+        assert_eq!(
+            super::key_char(0xfe51),
+            None,
+            "dead_acute itself is not text"
+        );
+        assert_eq!(super::key_char(0xffe3), None);
+    }
+
+    #[test]
     fn altgr_and_caps_produce_the_expected_symbols() {
         // Swedish key with base, Shift, AltGr and Shift+AltGr levels.
         let syms = [0x32, 0x22, 0x40, 0x32];
@@ -6966,6 +7092,37 @@ mod search_tests {
 
     fn names(items: &[Item], order: &[usize]) -> Vec<String> {
         order.iter().map(|&i| items[i].name.clone()).collect()
+    }
+
+    #[test]
+    fn matching_ignores_diacritics_but_ranks_exact_text_first() {
+        let items = vec![
+            row("Applications", "Écran", "screen.desktop"),
+            row("Applications", "Ecrin", "case.desktop"),
+            row("Applications", "Skärmläsare", "orca.desktop"),
+            row("Applications", "Café", "cafe.desktop"),
+        ];
+        let usage = crate::usage::Usage::default();
+        // A plain e finds É and é.
+        assert_eq!(
+            names(&items, &filtered(&items, "ecr", &usage)),
+            ["Ecrin", "Écran"]
+        );
+        assert_eq!(names(&items, &filtered(&items, "cafe", &usage)), ["Café"]);
+        // a matches ä, and the Swedish spelling still matches exactly.
+        assert_eq!(
+            names(&items, &filtered(&items, "skarm", &usage)),
+            ["Skärmläsare"]
+        );
+        assert_eq!(
+            names(&items, &filtered(&items, "skärm", &usage)),
+            ["Skärmläsare"]
+        );
+        // é typed with a dead key ranks the exact É row first.
+        assert_eq!(
+            names(&items, &filtered(&items, "écr", &usage)),
+            ["Écran", "Ecrin"]
+        );
     }
 
     #[test]

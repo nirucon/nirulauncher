@@ -80,6 +80,34 @@ while kill -0 "$LAUNCHER" 2>/dev/null; do
   sleep 0.05
 done
 LAUNCHER=""
+# Dead keys compose in the search field: dead_acute then e is é, which finds
+# "Café Écran" ahead of every row that only matches a folded e. xdotool maps
+# the dead key onto a spare keycode first, so this also proves the cached
+# keyboard map is refreshed on MappingNotify.
+cat > "$T/data/applications/cafe.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Café Écran
+Exec=$T/fakeapp --cafe
+DESKTOP
+"$BIN" --apps >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo "FAIL compose launcher did not map"; exit 1; }
+  sleep 0.05
+done
+xdotool key --delay 40 dead_acute e
+xdotool type --delay 20 'cran'
+xdotool key Return
+i=0
+while kill -0 "$LAUNCHER" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo "FAIL compose launch did not exit"; exit 1; }
+  sleep 0.05
+done
+LAUNCHER=""
+[ "$(cat "$T/args")" = "--cafe" ] || { echo "FAIL dead key did not compose é: $(cat "$T/args")"; exit 1; }
+rm -f "$T/args" "$T/data/applications/cafe.desktop"
 # Large fonts must grow rows instead of clipping. With max_rows=3 the window
 # must be taller than the old fixed 26 px row layout.
 mkdir -p "$XDG_CONFIG_HOME/nirulauncher"
