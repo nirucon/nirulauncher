@@ -25,3 +25,16 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
             -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh /src/tests/first-paint.sh /src/tests/event-sounds.sh
+  msrv:
+    # The declared rust-version and Debian 13's rustc must build the locked tree.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: ['1.75', '1.85']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked -- --test-threads=1
