@@ -7,6 +7,7 @@
 mod config;
 mod desktop;
 mod intent;
+mod providers;
 mod render;
 mod saved;
 mod sound;
@@ -183,6 +184,14 @@ struct Ui {
     sound_test_rx: Option<Receiver<std::result::Result<sound::TestResult, String>>>,
     sound_test: Option<sound::TestResult>,
     sound_busy: Option<String>,
+    /// Provider rows of the current view that are still loading.
+    catalog_rx: Option<Receiver<Vec<Item>>>,
+    /// The view those rows belong to.
+    catalog_for: String,
+    /// Whether arriving rows get favourite marks (the opening view does).
+    catalog_favorites: bool,
+    /// The user moved the selection, so arriving rows must keep it.
+    moved: bool,
 }
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
@@ -198,16 +207,13 @@ fn bounded_output(
     args: &[&str],
     budget: std::time::Duration,
 ) -> Option<std::process::Output> {
-    let limit = format!("{:.2}", budget.as_secs_f64());
-    let result = std::process::Command::new("timeout")
-        .args(["-k", "0.2", &limit, program])
-        .args(args)
-        .output()
-        .ok();
-    match result {
-        Some(output) if output.status.code() == Some(124) => None,
-        other => other,
-    }
+    providers::bounded(program, args, budget)
+}
+
+/// The launcher changed something itself: later views read providers again.
+fn forget_providers() {
+    providers::forget();
+    sound::forget_status();
 }
 
 fn set_utf8(c: &RustConnection, win: Window, atom: Atom, value: &str) -> Result<()> {
@@ -277,7 +283,7 @@ fn microphone_items() -> Vec<Item> {
             },
         });
     }
-    match Command::new("niructl").args(["audio", "sources"]).output() {
+    match providers::output("niructl", &["audio", "sources"]) {
         Ok(output) if output.status.success() => {
             let mut found = false;
             for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -537,12 +543,7 @@ fn sound_items(
 }
 
 fn clip_profiles() -> Vec<(String, String, String, String, String)> {
-    let Ok(output) = Command::new("niruclip")
-        .arg("--list-profiles")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let Ok(output) = providers::output("niruclip", &["--list-profiles"]) else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -566,12 +567,7 @@ fn clip_profiles() -> Vec<(String, String, String, String, String)> {
 }
 
 fn clip_recoverable() -> bool {
-    let Ok(output) = Command::new("niruclip")
-        .args(["--status", "--json"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let Ok(output) = providers::output("niruclip", &["--status", "--json"]) else {
         return false;
     };
     if !output.status.success() {
@@ -587,8 +583,10 @@ fn clip_recoverable() -> bool {
         .unwrap_or(false)
 }
 
-fn health_items() -> Vec<Item> {
-    let mut items = Vec::new();
+/// The Health rows. The view shows [`health_static_items`] at once and these
+/// provider rows when they arrive; each check runs in its own thread so the
+/// slowest provider, not their sum, decides when the rows appear.
+fn health_provider_items() -> Vec<Item> {
     let info = |key: &str, group: &str, name: String, detail: String| Item {
         key: key.into(),
         group: group.into(),
@@ -598,162 +596,190 @@ fn health_items() -> Vec<Item> {
         favorite: false,
         target: Target::Info,
     };
-    match Command::new("nirux").arg("status").output() {
-        Ok(output) if output.status.success() => {
-            for (index, line) in String::from_utf8_lossy(&output.stdout).lines().enumerate() {
-                if line.starts_with("installed ") {
-                    continue;
-                }
-                let key = if index == 0 {
-                    "health:nirux".to_string()
-                } else {
-                    format!("health:nirux:{index}")
-                };
-                let target = if line.contains("old generation") {
-                    Target::Terminal {
-                        argv: vec!["nirux".into(), "status".into()],
-                        hold: true,
+    let info = &info;
+    std::thread::scope(|scope| {
+        let sections = [
+            scope.spawn(|| {
+                let mut items = Vec::new();
+                match providers::output("nirux", &["status"]) {
+                    Ok(output) if output.status.success() => {
+                        for (index, line) in
+                            String::from_utf8_lossy(&output.stdout).lines().enumerate()
+                        {
+                            if line.starts_with("installed ") {
+                                continue;
+                            }
+                            let key = if index == 0 {
+                                "health:nirux".to_string()
+                            } else {
+                                format!("health:nirux:{index}")
+                            };
+                            let target = if line.contains("old generation") {
+                                Target::Terminal {
+                                    argv: vec!["nirux".into(), "status".into()],
+                                    hold: true,
+                                }
+                            } else {
+                                Target::Info
+                            };
+                            items.push(Item {
+                                key,
+                                group: "Health".into(),
+                                name: line.to_string(),
+                                detail: if line.contains("old generation") {
+                                    "Log out and back in to activate".into()
+                                } else {
+                                    "NIRUX runtime status".into()
+                                },
+                                keywords: "health status".into(),
+                                favorite: false,
+                                target,
+                            });
+                        }
                     }
+                    Ok(_) => items.push(info(
+                        "health:nirux",
+                        "Health",
+                        "NIRUX status needs attention".into(),
+                        "Run the full diagnostics for details".into(),
+                    )),
+                    Err(_) => items.push(info(
+                        "health:nirux",
+                        "Health",
+                        "NIRUX is not available".into(),
+                        "The installer command was not found".into(),
+                    )),
+                }
+                items
+            }),
+            scope.spawn(|| {
+                let mut items = Vec::new();
+                match sound::status() {
+                    Ok(snapshot) if snapshot.available => {
+                        let output = snapshot
+                            .output
+                            .as_ref()
+                            .map(|reading| format!("{} ({}%)", reading.name, reading.percent))
+                            .unwrap_or_else(|| "no default output".into());
+                        let input = snapshot
+                            .input
+                            .as_ref()
+                            .map(|reading| format!("{} ({}%)", reading.name, reading.percent))
+                            .unwrap_or_else(|| "no default input".into());
+                        items.push(Item {
+                            key: "health:audio".into(),
+                            group: "Health".into(),
+                            name: "Audio available".into(),
+                            detail: format!("Output: {output} · Input: {input}"),
+                            keywords: "audio pipewire microphone".into(),
+                            favorite: false,
+                            target: Target::Mode("sound".into()),
+                        });
+                    }
+                    Ok(snapshot) => items.push(Item {
+                        key: "health:audio".into(),
+                        group: "Health".into(),
+                        name: "Audio unavailable".into(),
+                        detail: snapshot
+                            .reason
+                            .unwrap_or_else(|| "PipeWire is not responding".into()),
+                        keywords: "audio pipewire microphone".into(),
+                        favorite: false,
+                        target: Target::Mode("sound".into()),
+                    }),
+                    Err(error) => items.push(info(
+                        "health:audio",
+                        "Health",
+                        "Audio unavailable".into(),
+                        error,
+                    )),
+                }
+                items
+            }),
+            scope.spawn(|| {
+                let mut items = Vec::new();
+                let network = wifi::snapshot(false);
+                let network_name = if !network.present {
+                    "Network provider unavailable".to_string()
+                } else if network.connected {
+                    format!(
+                        "Network: {}",
+                        if network.ssid.is_empty() {
+                            "connected"
+                        } else {
+                            &network.ssid
+                        }
+                    )
                 } else {
-                    Target::Info
+                    "Network: disconnected".to_string()
                 };
                 items.push(Item {
-                    key,
+                    key: "health:network".into(),
                     group: "Health".into(),
-                    name: line.to_string(),
-                    detail: if line.contains("old generation") {
-                        "Log out and back in to activate".into()
-                    } else {
-                        "NIRUX runtime status".into()
-                    },
-                    keywords: "health status".into(),
+                    name: network_name,
+                    detail: "Open Wi-Fi and connection details".into(),
+                    keywords: "network wifi connection".into(),
                     favorite: false,
-                    target,
+                    target: Target::Mode("wifi".into()),
                 });
-            }
-        }
-        Ok(_) => items.push(info(
-            "health:nirux",
-            "Health",
-            "NIRUX status needs attention".into(),
-            "Run the full diagnostics for details".into(),
-        )),
-        Err(_) => items.push(info(
-            "health:nirux",
-            "Health",
-            "NIRUX is not available".into(),
-            "The installer command was not found".into(),
-        )),
-    }
-    match sound::status() {
-        Ok(snapshot) if snapshot.available => {
-            let output = snapshot
-                .output
-                .as_ref()
-                .map(|reading| format!("{} ({}%)", reading.name, reading.percent))
-                .unwrap_or_else(|| "no default output".into());
-            let input = snapshot
-                .input
-                .as_ref()
-                .map(|reading| format!("{} ({}%)", reading.name, reading.percent))
-                .unwrap_or_else(|| "no default input".into());
-            items.push(Item {
-                key: "health:audio".into(),
-                group: "Health".into(),
-                name: "Audio available".into(),
-                detail: format!("Output: {output} · Input: {input}"),
-                keywords: "audio pipewire microphone".into(),
-                favorite: false,
-                target: Target::Mode("sound".into()),
-            });
-        }
-        Ok(snapshot) => items.push(Item {
-            key: "health:audio".into(),
-            group: "Health".into(),
-            name: "Audio unavailable".into(),
-            detail: snapshot
-                .reason
-                .unwrap_or_else(|| "PipeWire is not responding".into()),
-            keywords: "audio pipewire microphone".into(),
-            favorite: false,
-            target: Target::Mode("sound".into()),
-        }),
-        Err(error) => items.push(info(
-            "health:audio",
-            "Health",
-            "Audio unavailable".into(),
-            error,
-        )),
-    }
-    let network = wifi::snapshot(false);
-    let network_name = if !network.present {
-        "Network provider unavailable".to_string()
-    } else if network.connected {
-        format!(
-            "Network: {}",
-            if network.ssid.is_empty() {
-                "connected"
-            } else {
-                &network.ssid
-            }
-        )
-    } else {
-        "Network: disconnected".to_string()
-    };
-    items.push(Item {
-        key: "health:network".into(),
-        group: "Health".into(),
-        name: network_name,
-        detail: "Open Wi-Fi and connection details".into(),
-        keywords: "network wifi connection".into(),
-        favorite: false,
-        target: Target::Mode("wifi".into()),
-    });
-    let display_ok = Command::new("niructl")
-        .args(["monitors"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-    items.push(Item {
-        key: "health:display".into(),
-        group: "Health".into(),
-        name: if display_ok {
-            "Display service available".into()
-        } else {
-            "Display service unavailable".into()
-        },
-        detail: "Open display layout and profiles".into(),
-        keywords: "display monitor randr".into(),
-        favorite: false,
-        target: Target::Mode("displays".into()),
-    });
-    let capture = Command::new("niruclip")
-        .args(["--status", "--json"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
-        .and_then(|value| {
-            value
-                .get("state")
-                .and_then(|state| state.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "unavailable".into());
-    items.push(Item {
-        key: "health:capture".into(),
-        group: "Health".into(),
-        name: format!("Capture: {capture}"),
-        detail: "Open capture profiles and recording controls".into(),
-        keywords: "capture recording camera niruclip".into(),
-        favorite: false,
-        target: Target::Mode("clip".into()),
-    });
-    items.push(Item {
+                items
+            }),
+            scope.spawn(|| {
+                let mut items = Vec::new();
+                let display_ok = providers::output("niructl", &["monitors"])
+                    .map(|output| output.status.success())
+                    .unwrap_or(false);
+                items.push(Item {
+                    key: "health:display".into(),
+                    group: "Health".into(),
+                    name: if display_ok {
+                        "Display service available".into()
+                    } else {
+                        "Display service unavailable".into()
+                    },
+                    detail: "Open display layout and profiles".into(),
+                    keywords: "display monitor randr".into(),
+                    favorite: false,
+                    target: Target::Mode("displays".into()),
+                });
+                items
+            }),
+            scope.spawn(|| {
+                let mut items = Vec::new();
+                let capture = providers::output("niruclip", &["--status", "--json"])
+                    .ok()
+                    .and_then(|output| {
+                        serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()
+                    })
+                    .and_then(|value| {
+                        value
+                            .get("state")
+                            .and_then(|state| state.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| "unavailable".into());
+                items.push(Item {
+                    key: "health:capture".into(),
+                    group: "Health".into(),
+                    name: format!("Capture: {capture}"),
+                    detail: "Open capture profiles and recording controls".into(),
+                    keywords: "capture recording camera niruclip".into(),
+                    favorite: false,
+                    target: Target::Mode("clip".into()),
+                });
+                items
+            }),
+        ];
+        sections
+            .into_iter()
+            .flat_map(|section| section.join().unwrap_or_default())
+            .collect()
+    })
+}
+
+/// Health rows that need no provider: the diagnostics entry.
+fn health_static_items() -> Vec<Item> {
+    vec![Item {
         key: "health:doctor".into(),
         group: "Health".into(),
         name: "Run full diagnostics".into(),
@@ -764,11 +790,16 @@ fn health_items() -> Vec<Item> {
             argv: vec!["nirux".into(), "doctor".into()],
             hold: true,
         },
-    });
-    items
+    }]
 }
 
 fn clip_items() -> Vec<Item> {
+    let mut items = clip_static_items();
+    items.extend(clip_provider_items());
+    items
+}
+
+fn clip_static_items() -> Vec<Item> {
     let spawn = |key: &str, name: &str, detail: &str, args: &[&str]| Item {
         key: key.into(),
         group: "Capture".into(),
@@ -784,7 +815,7 @@ fn clip_items() -> Vec<Item> {
             path: None,
         },
     };
-    let mut items = vec![
+    let items = vec![
         spawn(
             "clip:full",
             "Full screen",
@@ -886,6 +917,27 @@ fn clip_items() -> Vec<Item> {
             },
         },
     ];
+    items
+}
+
+/// Capture profiles and recovery, from `niruclip`.
+fn clip_provider_items() -> Vec<Item> {
+    let spawn = |key: &str, name: &str, detail: &str, args: &[&str]| Item {
+        key: key.into(),
+        group: "Capture".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: "record recording screen webcam capture video spela in".into(),
+        favorite: false,
+        target: Target::Spawn {
+            argv: std::iter::once("niruclip".to_string())
+                .chain(args.iter().map(|arg| (*arg).to_string()))
+                .collect(),
+            terminal: false,
+            path: None,
+        },
+    };
+    let mut items = Vec::new();
     for (name, description, mode, audio, webcam) in clip_profiles() {
         items.push(spawn(
             &format!("clip:profile:{name}"),
@@ -1380,9 +1432,7 @@ fn share_items() -> Vec<Item> {
         favorite: false,
         target: Target::Mode("share-pair".into()),
     });
-    let devices = Command::new("nirushare")
-        .args(["devices"])
-        .output()
+    let devices = providers::output("nirushare", &["devices"])
         .ok()
         .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
         .and_then(|v| v.as_array().cloned())
@@ -1466,9 +1516,7 @@ fn share_items() -> Vec<Item> {
             path: None,
         },
     });
-    let inbox = Command::new("nirushare")
-        .args(["inbox"])
-        .output()
+    let inbox = providers::output("nirushare", &["inbox"])
         .ok()
         .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
         .and_then(|v| v.as_array().cloned())
@@ -1788,10 +1836,7 @@ fn bluetooth_items() -> Vec<Item> {
 }
 
 fn power_items() -> Vec<Item> {
-    let Ok(output) = Command::new("niructl")
-        .args(["powerprofile", "status"])
-        .output()
-    else {
+    let Ok(output) = providers::output("niructl", &["powerprofile", "status"]) else {
         return vec![Item {
             key: "power:unavailable".into(),
             group: "Power".into(),
@@ -2729,7 +2774,7 @@ fn timing_items() -> Vec<Item> {
         ),
     ];
     let mut values: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    match Command::new("niructl").args(["timing", "show"]).output() {
+    match providers::output("niructl", &["timing", "show"]) {
         Ok(out) if out.status.success() => {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 if let Some((key, value)) = line.split_once('=') {
@@ -2783,10 +2828,7 @@ fn timing_items() -> Vec<Item> {
 }
 
 fn input_items() -> Vec<Item> {
-    let out = match Command::new("niructl")
-        .args(["input", "status", "--json"])
-        .output()
-    {
+    let out = match providers::output("niructl", &["input", "status", "--json"]) {
         Ok(out) if out.status.success() => out,
         _ => {
             return vec![Item {
@@ -3006,15 +3048,58 @@ fn sound_action_items() -> Vec<Item> {
     items
 }
 
+/// Every row of the actions view, in its historical order. The view itself
+/// shows [`action_static_items`] at once and loads [`action_provider_items`]
+/// in a worker; `--list-actions` and the tests use this complete list.
 fn action_items(cfg: &Config) -> Vec<Item> {
+    let mut items = action_command_rows();
+    items.extend(clip_items());
+    items.extend(sound_action_items());
+    items.extend(theme_items());
+    items.extend(audio_output_rows());
+    items.extend(shortcut_items());
+    items.extend(settings_items());
+    items.extend(input_items());
+    items.extend(microphone_items());
+    items.extend(bluetooth_items());
+    items.extend(display_items());
+    items.extend(power_items());
+    items.extend(diagnostic_rows());
+    items.extend(update_rows());
+    items.extend(recipe_rows());
+    items.extend(action_tail_rows(cfg));
+    items
+}
+
+/// The action rows that need no provider query: shown in the first paint.
+fn action_static_items(cfg: &Config) -> Vec<Item> {
+    let mut items = action_command_rows();
+    items.extend(clip_static_items());
+    items.extend(sound_action_items());
+    items.extend(settings_items());
+    items.extend(update_rows());
+    items.extend(action_tail_rows(cfg));
+    items
+}
+
+/// The action rows that come from providers (niructl, niruclip, wpctl).
+fn action_provider_items() -> Vec<Item> {
+    let mut items = clip_provider_items();
+    items.extend(theme_items());
+    items.extend(audio_output_rows());
+    items.extend(shortcut_items());
+    items.extend(input_items());
+    items.extend(microphone_items());
+    items.extend(bluetooth_items());
+    items.extend(display_items());
+    items.extend(power_items());
+    items.extend(diagnostic_rows());
+    items.extend(recipe_rows());
+    items
+}
+
+fn action_command_rows() -> Vec<Item> {
     let mut items = Vec::new();
-    let niructl = |args: &[&str]| Target::Spawn {
-        argv: std::iter::once("niructl".to_string())
-            .chain(args.iter().map(|s| s.to_string()))
-            .collect(),
-        terminal: false,
-        path: None,
-    };
     for (name, detail, action) in [
         ("Lock screen", "Lock now", "lock"),
         ("Screensaver", "Show the screensaver now", "screensaver"),
@@ -3112,9 +3197,18 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             },
         });
     }
-    items.extend(clip_items());
-    items.extend(sound_action_items());
-    items.extend(theme_items());
+    items
+}
+
+fn audio_output_rows() -> Vec<Item> {
+    let mut items = Vec::new();
+    let niructl = |args: &[&str]| Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    };
     // Choosing an image, the scale, rotation and theme following belong to
     // NIRU Wallpaper, which shows previews and the per-screen choice. The
     // launcher keeps the one entry that opens it instead of repeating a list
@@ -3123,7 +3217,7 @@ fn action_items(cfg: &Config) -> Vec<Item> {
     // Audio output/source selection uses niructl -> wpctl. The ID, not the
     // display name, is authoritative because two devices may share a name.
     for (kind, label) in [("outputs", "Audio output")] {
-        if let Ok(out) = Command::new("niructl").args(["audio", kind]).output() {
+        if let Ok(out) = providers::output("niructl", &["audio", kind]) {
             if out.status.success() {
                 for line in String::from_utf8_lossy(&out.stdout).lines() {
                     let (default, rest) = match line.strip_prefix('*') {
@@ -3153,19 +3247,20 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             }
         }
     }
+    items
+}
 
-    items.extend(shortcut_items());
-    items.extend(settings_items());
-    items.extend(input_items());
-    items.extend(microphone_items());
-    items.extend(bluetooth_items());
-    items.extend(display_items());
-    items.extend(power_items());
+fn diagnostic_rows() -> Vec<Item> {
+    let mut items = Vec::new();
+    let niructl = |args: &[&str]| Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    };
 
-    if let Ok(out) = Command::new("niructl")
-        .args(["explain", "--launcher"])
-        .output()
-    {
+    if let Ok(out) = providers::output("niructl", &["explain", "--launcher"]) {
         if out.status.success() {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 let mut fields = line.splitn(4, '\t');
@@ -3205,6 +3300,11 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             }
         }
     }
+    items
+}
+
+fn update_rows() -> Vec<Item> {
+    let mut items = Vec::new();
     // A newer NIRUX release, read from the same cache the bar uses. The action
     // runs the update in a terminal: it needs sudo and switches the program
     // generation, so it must not happen behind the user's back.
@@ -3234,8 +3334,20 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             hold: true,
         },
     });
+    items
+}
 
-    if let Ok(out) = Command::new("niructl").args(["recipe", "list"]).output() {
+fn recipe_rows() -> Vec<Item> {
+    let mut items = Vec::new();
+    let niructl = |args: &[&str]| Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    };
+
+    if let Ok(out) = providers::output("niructl", &["recipe", "list"]) {
         if out.status.success() {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 let mut fields = line.splitn(3, '\t');
@@ -3261,6 +3373,18 @@ fn action_items(cfg: &Config) -> Vec<Item> {
             }
         }
     }
+    items
+}
+
+fn action_tail_rows(cfg: &Config) -> Vec<Item> {
+    let mut items = Vec::new();
+    let niructl = |args: &[&str]| Target::Spawn {
+        argv: std::iter::once("niructl".to_string())
+            .chain(args.iter().map(|s| s.to_string()))
+            .collect(),
+        terminal: false,
+        path: None,
+    };
 
     // One wallpaper entry, offering the window that owns these settings.
     // It is shown only when it is installed, so a system that predates it
@@ -4005,6 +4129,150 @@ fn wait_until_viewable(c: &RustConnection, win: Window) -> Result<()> {
     }
 }
 
+/// Provider rows for a view, built in a worker thread.
+type ProviderJob = Box<dyn FnOnce() -> Vec<Item> + Send>;
+
+/// What a view paints at once, plus the provider rows that follow.
+struct ViewCatalog {
+    items: Vec<Item>,
+    job: Option<ProviderJob>,
+}
+
+/// A row that stands in for provider rows that are still loading.
+fn pending_item(mode: &str) -> Item {
+    let (group, name) = match mode {
+        "actions" | "system-actions" => ("System", "Loading devices, displays and diagnostics…"),
+        "apps" => ("Saved actions", "Loading saved actions…"),
+        "health" => (
+            "Health",
+            "Checking NIRUX, audio, network, display and capture…",
+        ),
+        "clip" => ("Capture", "Loading capture profiles…"),
+        "microphone" => ("Audio", "Loading microphones…"),
+        "bluetooth" => ("Bluetooth", "Loading Bluetooth…"),
+        "share" => ("NIRU Share", "Loading NIRU Share…"),
+        "tailscale" => ("Tailscale", "Loading Tailscale peers…"),
+        "displays" => ("Displays", "Loading displays…"),
+        "power" => ("Power", "Loading power profiles…"),
+        "keys" => ("Shortcuts", "Loading keybindings…"),
+        "themes" => ("Appearance", "Loading themes…"),
+        "timing" => ("Timing", "Loading idle and lock timing…"),
+        "input" => ("Input", "Loading input devices…"),
+        _ => ("", "Loading…"),
+    };
+    Item {
+        key: format!("pending:{mode}"),
+        group: group.into(),
+        name: name.into(),
+        detail: "…".into(),
+        keywords: String::new(),
+        favorite: false,
+        target: Target::Info,
+    }
+}
+
+fn is_pending(item: &Item) -> bool {
+    item.key.starts_with("pending:")
+}
+
+fn saved_action_rows() -> Vec<Item> {
+    let mut items = Vec::new();
+    append_saved_actions(&mut items, &load_saved_actions());
+    items
+}
+
+/// The rows of a view: the ones that need no provider, and a job for the rest.
+fn view_catalog(mode: &str, cfg: &Config, c: &RustConnection, root: Window) -> ViewCatalog {
+    let job = |job: ProviderJob, mut items: Vec<Item>| {
+        items.push(pending_item(mode));
+        ViewCatalog {
+            items,
+            job: Some(job),
+        }
+    };
+    let ready = |items: Vec<Item>| ViewCatalog { items, job: None };
+    match mode {
+        "clip" => job(Box::new(clip_provider_items), clip_static_items()),
+        "actions" => {
+            let mut items = action_static_items(cfg);
+            items.extend(window_items(c, root));
+            items.extend(app_items(desktop::discover()));
+            job(
+                Box::new(|| {
+                    let mut items = action_provider_items();
+                    items.extend(saved_action_rows());
+                    items
+                }),
+                items,
+            )
+        }
+        "system-actions" => job(
+            Box::new(|| {
+                let mut items = action_provider_items();
+                items.extend(saved_action_rows());
+                items
+            }),
+            action_static_items(cfg),
+        ),
+        "microphone" => job(Box::new(microphone_items), Vec::new()),
+        "bluetooth" => job(Box::new(bluetooth_items), Vec::new()),
+        "agent" => ready(agent_items()),
+        "share" => job(Box::new(share_items), Vec::new()),
+        "share-pair" => ready(share_pair_items()),
+        "quick" => ready(quick_items()),
+        "clipboard" => ready(clipboard_items()),
+        "tailscale" => job(Box::new(tailscale_items), Vec::new()),
+        "displays" => job(Box::new(display_items), Vec::new()),
+        "power" => job(Box::new(power_items), Vec::new()),
+        "windows" => ready(window_items(c, root)),
+        // Dedicated web search: the provider rows are the whole list and are
+        // built from the query, including when it is empty.
+        "search" | "wifi" | "wired" => ready(Vec::new()),
+        "keys" => job(Box::new(shortcut_items), Vec::new()),
+        "settings" => ready(settings_items()),
+        "themes" => job(Box::new(theme_items), Vec::new()),
+        "timing" => job(Box::new(timing_items), Vec::new()),
+        "input" => job(Box::new(input_items), Vec::new()),
+        "sound" => ready(sound_items(None, None, Some("Loading audio…"))),
+        "health" => job(Box::new(health_provider_items), health_static_items()),
+        _ => job(Box::new(saved_action_rows), app_items(desktop::discover())),
+    }
+}
+
+fn start_provider_job(job: ProviderJob) -> Receiver<Vec<Item>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(job());
+    });
+    rx
+}
+
+/// Mark configured and runtime favourites, then keep the first five by label.
+fn mark_favorites(items: &mut [Item], cfg: &Config) {
+    let runtime_favorites = load_runtime_favorites();
+    let removed_favorites = load_removed_favorites();
+    for item in items.iter_mut() {
+        let configured = cfg.favorites.iter().any(|favorite| {
+            favorite == &item.key
+                || favorite.eq_ignore_ascii_case(&item.name)
+                || favorite == &item.label()
+        });
+        item.favorite =
+            (item.favorite || configured || runtime_favorites.iter().any(|key| key == &item.key))
+                && !removed_favorites.iter().any(|key| key == &item.key);
+    }
+    let mut favorite_items: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.favorite)
+        .map(|(index, _)| index)
+        .collect();
+    favorite_items.sort_by_key(|index| items[*index].label().to_lowercase());
+    for index in favorite_items.into_iter().skip(5) {
+        items[index].favorite = false;
+    }
+}
+
 impl Drop for Ui {
     fn drop(&mut self) {
         if let Some(test) = &self.sound_test {
@@ -4016,92 +4284,16 @@ impl Drop for Ui {
 impl Ui {
     fn new(mode: &str) -> Result<Self> {
         let cfg = Config::load()?;
-        let apps = desktop::discover();
         let (c, screen) = x11rb::connect(None)?;
         let root = c.setup().roots[screen].root;
-        let saved_actions = if matches!(mode, "actions" | "system-actions" | "apps") {
-            load_saved_actions()
-        } else {
-            Vec::new()
-        };
-        let mut items = Vec::new();
-        if mode == "clip" {
-            items.extend(clip_items());
-        } else if mode == "actions" {
-            items.extend(action_items(&cfg));
-            append_saved_actions(&mut items, &saved_actions);
-            items.extend(window_items(&c, root));
-            items.extend(app_items(apps));
-        } else if mode == "system-actions" {
-            items.extend(action_items(&cfg));
-            append_saved_actions(&mut items, &saved_actions);
-        } else if mode == "microphone" {
-            items.extend(microphone_items());
-        } else if mode == "bluetooth" {
-            items.extend(bluetooth_items());
-        } else if mode == "agent" {
-            items.extend(agent_items());
-        } else if mode == "share" {
-            items.extend(share_items());
-        } else if mode == "share-pair" {
-            items.extend(share_pair_items());
-        } else if mode == "quick" {
-            items.extend(quick_items());
-        } else if mode == "clipboard" {
-            items.extend(clipboard_items());
-        } else if mode == "tailscale" {
-            items.extend(tailscale_items());
-        } else if mode == "displays" {
-            items.extend(display_items());
-        } else if mode == "power" {
-            items.extend(power_items());
-        } else if mode == "windows" {
-            items.extend(window_items(&c, root));
-        } else if mode == "search" {
-            // Dedicated web search: the provider rows are the whole list and
-            // are built from the query, including when it is empty.
-        } else if mode == "keys" {
-            items.extend(shortcut_items());
-        } else if mode == "settings" {
-            items.extend(settings_items());
-        } else if mode == "themes" {
-            items.extend(theme_items());
-        } else if mode == "timing" {
-            items.extend(timing_items());
-        } else if mode == "input" {
-            items.extend(input_items());
-        } else if mode == "sound" {
-            items.extend(sound_items(None, None, Some("Loading audio…")));
-        } else if mode == "health" {
-            items.extend(health_items());
-        } else {
-            items.extend(app_items(apps));
-            append_saved_actions(&mut items, &saved_actions);
-        }
-        let runtime_favorites = load_runtime_favorites();
-        let removed_favorites = load_removed_favorites();
-        for item in &mut items {
-            let configured = cfg.favorites.iter().any(|favorite| {
-                favorite == &item.key
-                    || favorite.eq_ignore_ascii_case(&item.name)
-                    || favorite == &item.label()
-            });
-            item.favorite = (item.favorite
-                || configured
-                || runtime_favorites.iter().any(|key| key == &item.key))
-                && !removed_favorites.iter().any(|key| key == &item.key);
-        }
-        let mut favorite_items: Vec<usize> = items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.favorite)
-            .map(|(index, _)| index)
-            .collect();
-        favorite_items.sort_by_key(|index| items[*index].label().to_lowercase());
-        for index in favorite_items.into_iter().skip(5) {
-            items[index].favorite = false;
-        }
-        if items.is_empty() && mode != "search" && mode != "wifi" && mode != "sound" {
+        // The first paint shows the rows that need no provider; the provider
+        // rows start loading right after it, so they do not compete with it.
+        let catalog = view_catalog(mode, &cfg, &c, root);
+        let has_job = catalog.job.is_some();
+        let provider_job = catalog.job;
+        let mut items = catalog.items;
+        mark_favorites(&mut items, &cfg);
+        if items.is_empty() && !has_job && mode != "search" && mode != "wifi" && mode != "sound" {
             return Err("no launchable applications or actions found".into());
         }
         let (px, py) = point(&c, root);
@@ -4123,7 +4315,10 @@ impl Ui {
         // Settings opens taller than its own short list so the views it
         // switches to (Keybindings, Idle timing) are not shown in a five-row
         // window; the launcher never resizes while it is open.
-        let rows = if matches!(mode, "settings" | "wifi" | "system-actions" | "sound") {
+        // A view whose rows come from providers cannot know its length yet.
+        let rows = if matches!(mode, "settings" | "wifi" | "system-actions" | "sound")
+            || (has_job && mode != "apps")
+        {
             cfg.max_rows
         } else {
             (items.len() + search_slot).min(cfg.max_rows).max(1)
@@ -4270,6 +4465,10 @@ impl Ui {
             sound_test_rx: None,
             sound_test: None,
             sound_busy: None,
+            catalog_rx: None,
+            catalog_for: mode.to_string(),
+            catalog_favorites: true,
+            moved: false,
             items,
             filtered,
             usage,
@@ -4301,6 +4500,7 @@ impl Ui {
             ui.enter_sound()?;
         }
         ui.draw()?;
+        ui.catalog_rx = provider_job.map(start_provider_job);
         Ok(ui)
     }
 
@@ -4342,10 +4542,11 @@ impl Ui {
             "Input devices"
         } else if self.items.iter().all(|item| item.group == "Appearance") {
             "Themes"
-        } else if self
-            .items
-            .iter()
-            .any(|item| item.key.starts_with("timing:"))
+        } else if self.mode == "timing"
+            || self
+                .items
+                .iter()
+                .any(|item| item.key.starts_with("timing:"))
         {
             "Idle and lock timing"
         } else if self.items.iter().all(|item| item.group == "Audio") {
@@ -4535,10 +4736,11 @@ impl Ui {
             "Enter opens · Esc close · ↑↓ move".to_string()
         } else if self.mode == "themes" {
             "Enter applies · Esc close · ↑↓ move".to_string()
-        } else if self
-            .items
-            .iter()
-            .any(|item| item.key.starts_with("timing:"))
+        } else if self.mode == "timing"
+            || self
+                .items
+                .iter()
+                .any(|item| item.key.starts_with("timing:"))
         {
             "Enter changes a value · Esc close · ↑↓ move".to_string()
         } else {
@@ -4572,6 +4774,7 @@ impl Ui {
     /// Open the compact sound panel. It paints immediately, then loads the
     /// PipeWire snapshot in a worker so the launcher never waits on wpctl.
     fn enter_sound(&mut self) -> Result<()> {
+        self.catalog_rx = None;
         self.mode = "sound".into();
         self.query.clear();
         self.confirm = None;
@@ -4688,6 +4891,7 @@ impl Ui {
 
     /// Open the Wi-Fi view with a quick status, then scan in a worker.
     fn enter_wifi(&mut self) -> Result<()> {
+        self.catalog_rx = None;
         self.mode = "wifi".into();
         self.query.clear();
         self.confirm = None;
@@ -4816,6 +5020,7 @@ impl Ui {
     }
 
     fn enter_wired(&mut self) -> Result<()> {
+        self.catalog_rx = None;
         self.mode = "wired".into();
         self.query.clear();
         self.confirm = None;
@@ -5150,6 +5355,7 @@ impl Ui {
             .output();
         match output {
             Ok(out) if out.status.success() => {
+                forget_providers();
                 self.error = format!("Saved action: {saved_name}");
             }
             Ok(out) => {
@@ -5235,6 +5441,7 @@ impl Ui {
                         .output()
                     {
                         Ok(out) if out.status.success() => {
+                            forget_providers();
                             self.error = format!("Saved the layout as {trimmed}");
                         }
                         Ok(out) => {
@@ -5285,6 +5492,7 @@ impl Ui {
                             .output()
                         {
                             Ok(out) if out.status.success() => {
+                                forget_providers();
                                 let key = format!("timing:{}", edit.key);
                                 if let Some(item) =
                                     self.items.iter_mut().find(|item| item.key == key)
@@ -5395,6 +5603,12 @@ impl Ui {
         self.items.extend(intent_rows);
         self.recent = base.recent.start + count..base.recent.end + count;
         self.filtered = intent_first_order(first, count, base.order);
+        // The loading row stays visible while typing; it is not a match.
+        if let Some(pending) = self.items.iter().position(is_pending) {
+            if !self.filtered.contains(&pending) {
+                self.filtered.push(pending);
+            }
+        }
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
     }
@@ -5405,6 +5619,7 @@ impl Ui {
         }
         let next = (self.selected as i32 + delta).clamp(0, self.filtered.len() as i32 - 1) as usize;
         self.selected = next;
+        self.moved = true;
         if self.selected < self.offset {
             self.offset = self.selected;
         }
@@ -5414,44 +5629,72 @@ impl Ui {
         self.confirm = None;
     }
 
-    /// The rows a settings sub-view shows. These are built in-process so
-    /// choosing one swaps the open launcher instead of racing a second one.
-    fn mode_items(&self, mode: &str) -> Vec<Item> {
-        match mode {
-            "wifi" => self
-                .wifi
-                .as_ref()
-                .map(wifi_items)
-                .unwrap_or_else(|| wifi_items(&wifi::snapshot(false))),
-            "wired" => self
-                .wired
-                .as_ref()
-                .map(wired_items)
-                .unwrap_or_else(|| wired_items(&wifi::wired_snapshot())),
-            "keys" => shortcut_items(),
-            "settings" => settings_items(),
-            "themes" => theme_items(),
-            "timing" => timing_items(),
-            "input" => input_items(),
-            "clip" => clip_items(),
-            "sound" => sound_items(
-                self.sound.as_ref(),
-                self.sound_test.as_ref(),
-                self.sound_busy.as_deref(),
-            ),
-            "health" => health_items(),
-            "microphone" => microphone_items(),
-            "bluetooth" => bluetooth_items(),
-            "quick" => quick_items(),
-            "share" => share_items(),
-            "share-pair" => share_pair_items(),
-            "agent" => agent_items(),
-            "clipboard" => clipboard_items(),
-            "tailscale" => tailscale_items(),
-            "displays" => display_items(),
-            "power" => power_items(),
-            "windows" => window_items(&self.c, self.root),
-            _ => Vec::new(),
+    /// Merge provider rows that finished loading. The selection stays on the
+    /// same row when the user already moved it, and a pending confirmation
+    /// survives only while that row is still the selected one.
+    fn poll_catalog(&mut self) -> Result<bool> {
+        let Some(rx) = self.catalog_rx.as_ref() else {
+            return Ok(false);
+        };
+        let rows = match rx.try_recv() {
+            Ok(rows) => rows,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        self.catalog_rx = None;
+        if self.catalog_for != self.mode {
+            return Ok(true);
+        }
+        let previous = self
+            .filtered
+            .get(self.selected)
+            .map(|&index| self.items[index].key.clone());
+        let confirm = self.confirm.take();
+        let error = std::mem::take(&mut self.error);
+        self.items.truncate(self.plain_items);
+        self.items.retain(|item| !is_pending(item));
+        self.items.extend(rows);
+        if self.catalog_favorites {
+            mark_favorites(&mut self.items, &self.cfg);
+        }
+        if self.items.is_empty() {
+            self.items.push(Item {
+                key: format!("empty:{}", self.mode),
+                group: String::new(),
+                name: "Nothing to show in this view".into(),
+                detail: String::new(),
+                keywords: String::new(),
+                favorite: false,
+                target: Target::Info,
+            });
+        }
+        self.plain_items = self.items.len();
+        let keep = self.moved || confirm.is_some();
+        self.refilter();
+        self.error = error;
+        if keep {
+            if let Some(position) = previous.as_ref().and_then(|key| {
+                self.filtered
+                    .iter()
+                    .position(|&index| &self.items[index].key == key)
+            }) {
+                self.selected = position;
+                self.confirm = confirm;
+            }
+        } else {
+            self.selected = 0;
+        }
+        self.reveal_selection();
+        self.draw()?;
+        Ok(true)
+    }
+
+    fn reveal_selection(&mut self) {
+        if self.selected < self.offset {
+            self.offset = self.selected;
+        }
+        if self.selected >= self.offset + self.rows {
+            self.offset = self.selected + 1 - self.rows;
         }
     }
 
@@ -5465,13 +5708,19 @@ impl Ui {
         if mode == "sound" {
             return self.enter_sound();
         }
-        let items = self.mode_items(mode);
-        if items.is_empty() {
+        // The rows a settings sub-view shows are built in-process so choosing
+        // one swaps the open launcher instead of racing a second one.
+        let catalog = view_catalog(mode, &self.cfg, &self.c, self.root);
+        if catalog.items.is_empty() && catalog.job.is_none() {
             self.error = "Nothing to show in this view".into();
             self.draw()?;
             return Ok(());
         }
-        self.items = items;
+        self.catalog_rx = catalog.job.map(start_provider_job);
+        self.catalog_for = mode.to_string();
+        self.catalog_favorites = false;
+        self.moved = false;
+        self.items = catalog.items;
         self.plain_items = self.items.len();
         self.web_mode = false;
         self.mode = mode.to_string();
@@ -5718,6 +5967,9 @@ impl Ui {
             if self.sound_test_rx.is_some() && self.poll_sound_test()? {
                 continue;
             }
+            if self.catalog_rx.is_some() && self.poll_catalog()? {
+                continue;
+            }
             let event = match self.c.poll_for_event()? {
                 Some(event) => event,
                 None => {
@@ -5725,6 +5977,7 @@ impl Ui {
                         || self.wired_rx.is_some()
                         || self.sound_rx.is_some()
                         || self.sound_test_rx.is_some()
+                        || self.catalog_rx.is_some()
                     {
                         std::thread::sleep(std::time::Duration::from_millis(40));
                         continue;

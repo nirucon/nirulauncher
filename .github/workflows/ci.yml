@@ -19,7 +19,8 @@ jobs:
           cargo build --release --locked
           sh tests/ui-smoke.sh target/release/nirulauncher
           sh tests/theme-colors.sh target/release/nirulauncher
+          sh tests/first-paint.sh target/release/nirulauncher
       - name: Shellcheck
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
-            -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh
+            -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh /src/tests/first-paint.sh

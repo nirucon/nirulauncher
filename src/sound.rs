@@ -108,9 +108,25 @@ fn bounded_json(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// The PipeWire state, read once per launcher process: Health and the Sound
+/// view share it. [`forget_status`] makes the next call read it again.
 pub fn status() -> Result<Snapshot, String> {
-    let bytes = bounded_json(&["audio", "status", "--json"], Duration::from_secs(3))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("invalid audio status: {error}"))
+    let mut memo = STATUS.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(answer) = memo.as_ref() {
+        return answer.clone();
+    }
+    let answer =
+        bounded_json(&["audio", "status", "--json"], Duration::from_secs(3)).and_then(|bytes| {
+            serde_json::from_slice(&bytes).map_err(|error| format!("invalid audio status: {error}"))
+        });
+    *memo = Some(answer.clone());
+    answer
+}
+
+static STATUS: std::sync::Mutex<Option<Result<Snapshot, String>>> = std::sync::Mutex::new(None);
+
+pub fn forget_status() {
+    *STATUS.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
 }
 
 pub fn microphone_test(seconds: u64) -> Result<TestResult, String> {
