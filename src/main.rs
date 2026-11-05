@@ -11,6 +11,7 @@ mod render;
 mod saved;
 mod sound;
 mod tailscale;
+mod usage;
 mod websearch;
 mod wifi;
 
@@ -137,7 +138,11 @@ struct Ui {
     renderer: Renderer,
     items: Vec<Item>,
     filtered: Vec<usize>,
-    usage: std::collections::HashMap<String, u64>,
+    usage: usage::Usage,
+    /// Rows right after the favourites that are shown as recent.
+    recent: std::ops::Range<usize>,
+    /// The marker for recent rows; ASCII when the font has no arrow glyph.
+    recent_mark: char,
     query: String,
     selected: usize,
     offset: usize,
@@ -3577,49 +3582,20 @@ fn window_items(c: &RustConnection, root: Window) -> Vec<Item> {
 }
 
 fn usage_path() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                .join(".local/state")
-        });
-    base.join("nirulauncher/usage.tsv")
+    usage::path()
 }
 
-fn load_usage() -> std::collections::HashMap<String, u64> {
-    let mut usage = std::collections::HashMap::new();
-    let Ok(text) = std::fs::read_to_string(usage_path()) else {
-        return usage;
-    };
-    for line in text.lines().take(500) {
-        let Some((key, stamp)) = line.rsplit_once('\t') else {
-            continue;
-        };
-        if let Ok(stamp) = stamp.parse::<u64>() {
-            usage.insert(key.to_string(), stamp);
-        }
+/// The history used for ranking, or none when `rank_by_usage = false`.
+fn load_usage(cfg: &Config) -> usage::Usage {
+    if cfg.rank_by_usage {
+        usage::load()
+    } else {
+        usage::Usage::default()
     }
-    usage
 }
 
 fn record_usage(key: &str) {
-    let mut usage = load_usage();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    usage.insert(key.to_string(), now);
-    let mut rows: Vec<(&String, &u64)> = usage.iter().collect();
-    rows.sort_by(|a, b| b.1.cmp(a.1));
-    rows.truncate(200);
-    let text: String = rows
-        .into_iter()
-        .map(|(key, stamp)| format!("{key}\t{stamp}\n"))
-        .collect();
-    if let Some(parent) = usage_path().parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(usage_path(), text);
+    usage::record(key);
 }
 
 fn favorites_path() -> std::path::PathBuf {
@@ -3719,11 +3695,60 @@ fn term_rank(
     }
 }
 
-fn filtered(
-    items: &[Item],
-    query: &str,
-    _usage: &std::collections::HashMap<String, u64>,
-) -> Vec<usize> {
+/// The lowercased text of one row that a query is matched against.
+struct SearchFields {
+    name: String,
+    label: String,
+    group: String,
+    detail: String,
+    keywords: String,
+}
+
+impl SearchFields {
+    fn new(item: &Item) -> Self {
+        Self {
+            name: item.name.to_lowercase(),
+            label: item.label().to_lowercase(),
+            group: item.group.to_lowercase(),
+            detail: item.detail.to_lowercase(),
+            keywords: item.keywords.to_lowercase(),
+        }
+    }
+
+    fn rank(&self, term: &str) -> Option<u8> {
+        term_rank(
+            term,
+            &self.name,
+            &self.label,
+            &self.group,
+            &self.detail,
+            &self.keywords,
+        )
+    }
+}
+
+/// The ordered rows for a query, and which of them form the "Recent" block.
+struct Ranked {
+    order: Vec<usize>,
+    recent: std::ops::Range<usize>,
+}
+
+/// How many recent rows an empty query shows after the favourites.
+const RECENT_ROWS: usize = 5;
+
+#[cfg(test)]
+fn filtered(items: &[Item], query: &str, usage: &usage::Usage) -> Vec<usize> {
+    ranked(items, query, usage, false).order
+}
+
+/// Order rows for a query.
+///
+/// Favourites come first. While searching, the text match decides; launch
+/// frecency only orders rows whose match is equally good, so a better match
+/// always beats a frequently used row. With an empty query and `recent`, the
+/// most recently launched rows (up to five) follow the favourites, then the
+/// rest alphabetically.
+fn ranked(items: &[Item], query: &str, usage: &usage::Usage, recent: bool) -> Ranked {
     let mut favorites: Vec<usize> = items
         .iter()
         .enumerate()
@@ -3732,31 +3757,59 @@ fn filtered(
         .collect();
     favorites.sort_by_key(|index| items[*index].label().to_lowercase());
     favorites.truncate(5);
-    let pinned: std::collections::HashSet<usize> = favorites.into_iter().collect();
+    let pinned: std::collections::HashSet<usize> = favorites.iter().copied().collect();
     let q = query.trim().to_lowercase();
     let terms: Vec<&str> = q.split_whitespace().collect();
-    let mut hits: Vec<(bool, u16, usize, String, usize)> = items
+    let recent_rows: Vec<usize> = if recent && terms.is_empty() && !usage.is_empty() {
+        let mut used: Vec<(u64, usize)> = items
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !pinned.contains(index))
+            .filter_map(|(index, item)| usage.last(&item.key).map(|stamp| (stamp, index)))
+            .collect();
+        // Newest first; one row per key even if a key appears twice.
+        used.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let mut seen = std::collections::HashSet::new();
+        used.into_iter()
+            .filter(|(_, index)| seen.insert(items[*index].key.as_str()))
+            .map(|(_, index)| index)
+            .take(RECENT_ROWS)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let recent_set: std::collections::HashSet<usize> = recent_rows.iter().copied().collect();
+    let mut hits: Vec<(bool, u16, std::cmp::Reverse<u32>, usize, String, usize)> = items
         .iter()
         .enumerate()
+        .filter(|(i, _)| !recent_set.contains(i))
         .filter_map(|(i, item)| {
             let label = item.label().to_lowercase();
-            let name = item.name.to_lowercase();
-            let group = item.group.to_lowercase();
-            let detail = item.detail.to_lowercase();
-            let keywords = item.keywords.to_lowercase();
             let rank = if terms.is_empty() {
                 0
             } else {
+                let fields = SearchFields::new(item);
                 let mut total = 0u16;
                 for term in &terms {
-                    total += u16::from(term_rank(term, &name, &label, &group, &detail, &keywords)?);
+                    total += u16::from(fields.rank(term)?);
                 }
                 total
             };
-            // A shorter label is a closer match only while searching; with an
-            // empty field the list stays alphabetical.
-            let length = if terms.is_empty() { 0 } else { label.len() };
-            Some((!pinned.contains(&i), rank, length, label.clone(), i))
+            // Frecency and a shorter label are closer matches only while
+            // searching; with an empty field the list stays alphabetical.
+            let (frecency, length) = if terms.is_empty() {
+                (0, 0)
+            } else {
+                (usage.score(&item.key), label.len())
+            };
+            Some((
+                !pinned.contains(&i),
+                rank,
+                std::cmp::Reverse(frecency),
+                length,
+                label,
+                i,
+            ))
         })
         .collect();
     hits.sort_by(|a, b| {
@@ -3765,8 +3818,16 @@ fn filtered(
             .then_with(|| a.2.cmp(&b.2))
             .then_with(|| a.3.cmp(&b.3))
             .then_with(|| a.4.cmp(&b.4))
+            .then_with(|| a.5.cmp(&b.5))
     });
-    hits.into_iter().map(|(_, _, _, _, i)| i).collect()
+    let pinned_count = hits.iter().take_while(|hit| !hit.0).count();
+    let mut order: Vec<usize> = hits.into_iter().map(|hit| hit.5).collect();
+    let recent_range = pinned_count..pinned_count + recent_rows.len();
+    order.splice(pinned_count..pinned_count, recent_rows);
+    Ranked {
+        order,
+        recent: recent_range,
+    }
 }
 
 fn system_action_priority(group: &str) -> u8 {
@@ -3791,16 +3852,23 @@ fn system_action_priority(group: &str) -> u8 {
     }
 }
 
-fn filtered_for_mode(
-    items: &[Item],
-    query: &str,
-    usage: &std::collections::HashMap<String, u64>,
-    mode: &str,
-) -> Vec<usize> {
+fn filtered_for_mode(items: &[Item], query: &str, usage: &usage::Usage, mode: &str) -> Vec<usize> {
+    ranked_for_mode(items, query, usage, mode).order
+}
+
+/// Views whose empty query shows recently launched rows.
+fn shows_recent(mode: &str) -> bool {
+    matches!(mode, "apps" | "actions")
+}
+
+fn ranked_for_mode(items: &[Item], query: &str, usage: &usage::Usage, mode: &str) -> Ranked {
     if mode == "agent" {
         // The query is the prompt, not a filter. Keeping the row selected
         // makes Enter predictable while the user types.
-        return (0..items.len()).collect();
+        return Ranked {
+            order: (0..items.len()).collect(),
+            recent: 0..0,
+        };
     }
     if mode == "system-actions" && query.trim().is_empty() {
         let mut order: Vec<usize> = (0..items.len()).collect();
@@ -3810,9 +3878,12 @@ fn filtered_for_mode(
                 items[*index].label().to_lowercase(),
             )
         });
-        order
+        Ranked {
+            order,
+            recent: 0..0,
+        }
     } else {
-        filtered(items, query, usage)
+        ranked(items, query, usage, shows_recent(mode))
     }
 }
 
@@ -4172,7 +4243,8 @@ impl Ui {
         );
         c.set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME)?;
         c.flush()?;
-        let usage = load_usage();
+        let usage = load_usage(&cfg);
+        let recent_mark = if renderer.covers('↺') { '↺' } else { '+' };
         let filtered = filtered_for_mode(&items, "", &usage, mode);
         let mut ui = Self {
             c,
@@ -4201,6 +4273,8 @@ impl Ui {
             items,
             filtered,
             usage,
+            recent: 0..0,
+            recent_mark,
             query: String::new(),
             selected: 0,
             offset: 0,
@@ -4396,6 +4470,8 @@ impl Ui {
             let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
             let label = if item.favorite {
                 format!("★ {}", item.label())
+            } else if self.query.trim().is_empty() && self.recent.contains(&(self.offset + line)) {
+                format!("{} {}", self.recent_mark, item.label())
             } else {
                 item.label()
             };
@@ -5302,19 +5378,23 @@ impl Ui {
         } else {
             Vec::new()
         };
-        let base_order = if self.query.trim().is_empty()
+        let base = if self.query.trim().is_empty()
             && matches!(self.mode.as_str(), "settings" | "timing" | "wifi")
         {
             // These views have a deliberate order: appearance first, then the
             // lock ladder. Alphabetical sorting would scramble both.
-            (0..self.items.len()).collect()
+            Ranked {
+                order: (0..self.items.len()).collect(),
+                recent: 0..0,
+            }
         } else {
-            filtered_for_mode(&self.items, &self.query, &self.usage, &self.mode)
+            ranked_for_mode(&self.items, &self.query, &self.usage, &self.mode)
         };
         let first = self.items.len();
         let count = intent_rows.len();
         self.items.extend(intent_rows);
-        self.filtered = intent_first_order(first, count, base_order);
+        self.recent = base.recent.start + count..base.recent.end + count;
+        self.filtered = intent_first_order(first, count, base.order);
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
         self.offset = 0;
     }
@@ -5400,6 +5480,7 @@ impl Ui {
         self.profile_name = None;
         self.confirm = None;
         self.filtered = filtered_for_mode(&self.items, "", &self.usage, &self.mode);
+        self.recent = 0..0;
         self.selected = 0;
         self.offset = 0;
         self.error.clear();
@@ -5462,7 +5543,7 @@ impl Ui {
                         }
                     }
                     record_usage(key);
-                    self.usage = load_usage();
+                    self.usage = load_usage(&self.cfg);
                     return Ok(false);
                 }
                 self.confirm = Some(action);
@@ -5482,7 +5563,7 @@ impl Ui {
                 match spawn_terminal_command(&argv, hold, &self.cfg) {
                     Ok(()) => {
                         record_usage(key);
-                        self.usage = load_usage();
+                        self.usage = load_usage(&self.cfg);
                         Ok(false)
                     }
                     Err(e) => {
@@ -5496,7 +5577,7 @@ impl Ui {
             Target::Agent(prompt) => match spawn_agent(&prompt, &self.cfg) {
                 Ok(()) => {
                     record_usage(key);
-                    self.usage = load_usage();
+                    self.usage = load_usage(&self.cfg);
                     Ok(false)
                 }
                 Err(e) => {
@@ -5518,7 +5599,7 @@ impl Ui {
                 )?;
                 self.c.flush()?;
                 record_usage(key);
-                self.usage = load_usage();
+                self.usage = load_usage(&self.cfg);
                 Ok(false)
             }
             Target::Spawn {
@@ -5528,7 +5609,7 @@ impl Ui {
             } => match spawn_command(&argv, path.as_deref(), terminal, &self.cfg) {
                 Ok(()) => {
                     record_usage(key);
-                    self.usage = load_usage();
+                    self.usage = load_usage(&self.cfg);
                     Ok(false)
                 }
                 Err(e) => {
@@ -5556,7 +5637,7 @@ impl Ui {
             return match result {
                 Ok(status) if status.success() => {
                     record_usage("share:pair:open");
-                    self.usage = load_usage();
+                    self.usage = load_usage(&self.cfg);
                     Ok(false)
                 }
                 _ => {
@@ -6239,9 +6320,7 @@ mod input_tests {
             searchable("c", "Applications", "Gamma"),
         ];
         items[1].favorite = true;
-        let mut usage = std::collections::HashMap::new();
-        usage.insert("c".to_string(), 20);
-        usage.insert("a".to_string(), 10);
+        let usage = crate::usage::Usage::from_rows([("c", 20), ("a", 10)], 30);
         let order = super::filtered(&items, "", &usage);
         assert_eq!(order, vec![1, 0, 2], "favourites first, then alphabetical");
     }
@@ -6249,7 +6328,7 @@ mod input_tests {
     #[test]
     fn group_names_are_searchable() {
         let items = vec![searchable("w1", "Windows", "Editor")];
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         assert_eq!(super::filtered(&items, "windows", &usage), vec![0]);
         assert_eq!(super::filtered(&items, "editor", &usage), vec![0]);
         assert!(super::filtered(&items, "missing", &usage).is_empty());
@@ -6459,7 +6538,7 @@ mod wallpaper_tests {
                 target: super::Target::Info,
             },
         ];
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         let order = super::filtered_for_mode(&items, "", &usage, "system-actions");
         assert_eq!(order.first(), Some(&1));
     }
@@ -6520,7 +6599,7 @@ mod wallpaper_tests {
     fn the_settings_row_is_searchable() {
         let _guard = lock();
         let items = items_with_wallpaper(true);
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         for query in ["wallpaper", "background", "appearance"] {
             assert!(
                 filtered(&items, query, &usage)
@@ -6630,6 +6709,102 @@ mod search_tests {
         }
     }
 
+    const DAY: u64 = 86_400;
+
+    fn names(items: &[Item], order: &[usize]) -> Vec<String> {
+        order.iter().map(|&i| items[i].name.clone()).collect()
+    }
+
+    #[test]
+    fn frecency_orders_equal_matches_while_searching() {
+        let items = vec![
+            row("Applications", "Files", "files.desktop"),
+            row("Applications", "Firefox", "firefox.desktop"),
+            row("Applications", "Fish", "fish.desktop"),
+        ];
+        let now = 50 * DAY;
+        let usage = crate::usage::Usage::from_rows(
+            [
+                ("Applications:Firefox", now - DAY),
+                ("Applications:Firefox", now - 2 * DAY),
+                ("Applications:Fish", now - 40 * DAY),
+            ],
+            now,
+        );
+        // All three are prefix matches: daily Firefox, then the old Fish, then
+        // the never used Files.
+        let order = filtered(&items, "fi", &usage);
+        assert_eq!(names(&items, &order), ["Firefox", "Fish", "Files"]);
+        // Without history the shorter name wins the tie, as before.
+        let order = filtered(&items, "fi", &crate::usage::Usage::default());
+        assert_eq!(names(&items, &order), ["Fish", "Files", "Firefox"]);
+    }
+
+    #[test]
+    fn a_better_text_match_beats_more_frequent_use() {
+        let items = vec![
+            row("Applications", "Terminal", "kitty.desktop"),
+            row("Applications", "Kitty", "kitty.desktop"),
+            row("Applications", "Kit builder", "kit.desktop"),
+        ];
+        let now = 50 * DAY;
+        let rows: Vec<(&str, u64)> = (0..30)
+            .map(|day| ("Applications:Kit builder", now - day * 3600))
+            .collect();
+        let usage = crate::usage::Usage::from_rows(rows, now);
+        // "kitty" is an exact name for Kitty; the heavily used row only has a
+        // prefix-free partial match and must stay behind it.
+        let order = filtered(&items, "kitty", &usage);
+        assert_eq!(names(&items, &order)[0], "Kitty");
+        // An exact name beats a frequently used prefix match.
+        let items = vec![
+            row("Applications", "Code", "code.desktop"),
+            row("Applications", "Codeblocks", "cb.desktop"),
+        ];
+        let rows: Vec<(&str, u64)> = (0..30)
+            .map(|hour| ("Applications:Codeblocks", now - hour * 3600))
+            .collect();
+        let usage = crate::usage::Usage::from_rows(rows, now);
+        assert_eq!(names(&items, &filtered(&items, "code", &usage))[0], "Code");
+    }
+
+    #[test]
+    fn an_empty_query_shows_recent_rows_after_the_favourites() {
+        let mut items: Vec<Item> = [
+            "Alpha", "Beta", "Gamma", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+        ]
+        .iter()
+        .map(|name| row("Applications", name, ""))
+        .collect();
+        items[7].favorite = true; // Hotel
+        let now = 50 * DAY;
+        let rows: Vec<(&str, u64)> = [
+            ("Applications:Golf", 10),
+            ("Applications:Foxtrot", 9),
+            ("Applications:Echo", 8),
+            ("Applications:Delta", 7),
+            ("Applications:Gamma", 6),
+            ("Applications:Beta", 5),
+            ("Applications:Hotel", 11),
+        ]
+        .into_iter()
+        .map(|(key, offset)| (key, now - DAY + offset))
+        .collect();
+        let usage = crate::usage::Usage::from_rows(rows, now);
+        let ranked = super::ranked(&items, "", &usage, true);
+        assert_eq!(
+            names(&items, &ranked.order),
+            ["Hotel", "Golf", "Foxtrot", "Echo", "Delta", "Gamma", "Alpha", "Beta"],
+            "favourite, five recent (newest first), then the rest alphabetically"
+        );
+        assert_eq!(ranked.recent, 1..6);
+        // Searching drops the recent block; views without it stay alphabetical.
+        assert!(super::ranked(&items, "a", &usage, true).recent.is_empty());
+        assert!(super::ranked(&items, "", &usage, false).recent.is_empty());
+        assert!(super::shows_recent("apps") && super::shows_recent("actions"));
+        assert!(!super::shows_recent("sound") && !super::shows_recent("settings"));
+    }
+
     /// A row is found by its group name, because the group is part of what the
     /// list calls it. Several groups rely on this instead of repeating the
     /// word in every row's name.
@@ -6639,7 +6814,7 @@ mod search_tests {
             row("Applications", "Zeta", "z.desktop"),
             row("Applications", "Alpha", "a.desktop"),
         ];
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         let order = filtered(&items, "", &usage);
         let names: Vec<&str> = order.iter().map(|&i| items[i].name.as_str()).collect();
         assert_eq!(names, ["Alpha", "Zeta"]);
@@ -6651,7 +6826,7 @@ mod search_tests {
             row("Appearance", "Compositor", "Toggle transparency"),
             row("Files", "Backup", "Copy to a disk"),
         ];
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         let hits: Vec<&str> = filtered(&items, "appearance", &usage)
             .into_iter()
             .map(|i| items[i].name.as_str())
@@ -6666,7 +6841,7 @@ mod search_tests {
             row("Wallpaper", "Wallpaper wallpaper wallpaper", "x"),
             row("Wallpaper", "Wallpaper", "y"),
         ];
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         let order = filtered(&items, "wallpaper", &usage);
         assert_eq!(
             items[order[0]].name, "Wallpaper",
@@ -6822,7 +6997,7 @@ mod search_tests {
         let mut firefox = row("Applications", "Firefox", "firefox.desktop");
         firefox.keywords = "web browser internet".into();
         let items = vec![firefox, row("Applications", "Files", "files.desktop")];
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         assert_eq!(filtered(&items, "web browser", &usage), vec![0]);
         assert_eq!(filtered(&items, "firfox", &usage), vec![0]);
         assert!(filtered(&items, "web files", &usage).is_empty());
@@ -6918,7 +7093,7 @@ mod intent_launcher_tests {
     #[test]
     fn the_agent_view_keeps_its_row_while_the_prompt_is_typed() {
         let rows = super::agent_items();
-        let usage = std::collections::HashMap::new();
+        let usage = crate::usage::Usage::default();
         assert_eq!(
             filtered_for_mode(&rows, "skriv en kort prompt", &usage, "agent"),
             vec![0]

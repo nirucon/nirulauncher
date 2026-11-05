@@ -70,3 +70,9 @@ terminal = ["kitty"]
 
 # Desktop-file IDs or action names pinned above search rank.
 # favorites = ["firefox.desktop", "Lock screen"]
+
+# Order equal search matches by how often and how recently they were launched
+# (local history in ~/.local/state/nirulauncher/usage.tsv), and show up to five
+# recent rows after the favourites when the field is empty. A better text
+# match always wins over frequent use.
+# rank_by_usage = true

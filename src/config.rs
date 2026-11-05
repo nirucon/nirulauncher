@@ -17,6 +17,9 @@ pub struct Config {
     pub browser: Vec<String>,
     /// Desktop-file IDs or action names pinned above search rank.
     pub favorites: Vec<String>,
+    /// Use local launch history (frecency) to order equal matches and to
+    /// show recent rows under an empty query.
+    pub rank_by_usage: bool,
     /// Engines added to, or turned off from, the built-in search list.
     pub search_sources: Vec<crate::websearch::ConfigSource>,
     /// Engine ids in the order the rows should appear.
@@ -73,6 +76,7 @@ impl Default for Config {
             terminal: vec!["kitty".into()],
             browser: Vec::new(),
             favorites: Vec::new(),
+            rank_by_usage: true,
             search_sources: Vec::new(),
             search_order: Vec::new(),
             search_default: None,
@@ -483,6 +487,9 @@ impl Config {
         if let Some(f) = array(v, "favorites") {
             cfg.favorites = f;
         }
+        if let Some(rank) = v.get("rank_by_usage").and_then(|x| x.as_bool()) {
+            cfg.rank_by_usage = rank;
+        }
         cfg.search_sources = search_sources_from(v);
         let (order, default, aliases) = search_preferences(v);
         cfg.search_order = order;
@@ -554,7 +561,7 @@ impl Config {
             } else {
                 self.search_order.join(", ")
             }
-        )
+        ) + &format!("\nrank by usage: {}", self.rank_by_usage)
     }
 }
 

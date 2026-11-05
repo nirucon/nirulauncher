@@ -160,6 +160,12 @@ impl Renderer {
         Ok(())
     }
 
+    /// Whether the font has a glyph for `ch` (`ab_glyph` maps a missing
+    /// character to glyph 0).
+    pub fn covers(&self, ch: char) -> bool {
+        self.font.glyph_id(ch).0 != 0
+    }
+
     /// Copy the finished frame to the window in one request.
     ///
     /// A renderer created with `direct` has already drawn on the window.
