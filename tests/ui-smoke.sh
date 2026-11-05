@@ -246,6 +246,31 @@ LAUNCHER=""
 grep -qxF 'https://duckduckgo.com/?q=metal+archives' "$ARGS_FILE" || {
   echo "FAIL wrong typed address: $(cat "$ARGS_FILE")"; exit 1
 }
+# No matches: the list says so, and Tab moves the typed text to the web
+# search in the same window.
+rm -f "$ARGS_FILE"
+"$BIN" --apps >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+i=0
+while ! xdotool search --name '^NIRULANCHER$' >/dev/null 2>&1; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$T/err"; echo 'FAIL no-match view'; exit 1; }
+  sleep 0.05
+done
+xdotool type --delay 20 'zzqqxx'
+sleep 0.3
+xdotool key Tab
+sleep 0.2
+xdotool key Return
+i=0
+while [ ! -s "$ARGS_FILE" ]; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo 'FAIL Tab did not switch to web search'; exit 1; }
+  sleep 0.05
+done
+wait "$LAUNCHER"
+LAUNCHER=""
+grep -qxF 'https://duckduckgo.com/?q=zzqqxx' "$ARGS_FILE" || {
+  echo "FAIL wrong no-match search: $(cat "$ARGS_FILE")"; exit 1
+}
 # Naming a layout profile happens in the launcher itself: the row opens a
 # prompt, and Enter saves the profile with the typed name.
 cat > "$T/bin/niructl" <<'SAVE'

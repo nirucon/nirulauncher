@@ -3,7 +3,8 @@
 #
 # 1. Every view maps within 150 ms while every provider sleeps 2 s, and
 #    Escape closes it at once.
-# 2. With fast providers, one open that shows the actions catalog and then
+# 2. Enter pressed before provider rows arrive acts on them when they do.
+# 3. With fast providers, one open that shows the actions catalog and then
 #    the Health view asks each provider query at most once.
 #
 # Usage: first-paint.sh /path/to/nirulauncher
@@ -72,6 +73,23 @@ for mode in apps actions system-actions health displays keys themes timing \
   echo "PASS $mode: mapped in ${mapped} ms with 2 s providers"
   while [ -n "$(window)" ]; do sleep 0.02; done
 done
+
+# Enter typed before the provider rows arrive acts on the best match once
+# they are there (the display rows come from a provider that answers late).
+: > "$PROVIDER_LOG"
+"$BIN" --displays >"$T/out" 2>"$T/err" &
+LAUNCHER=$!
+while [ -z "$(window)" ]; do kill -0 "$LAUNCHER" 2>/dev/null || fail 'displays exited'; done
+xdotool type --delay 5 'arrange'
+xdotool key Return
+i=0
+while ! grep -qxF 'niructl display auto' "$PROVIDER_LOG"; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && fail 'early Enter was lost'
+  sleep 0.05
+done
+wait "$LAUNCHER" 2>/dev/null || :
+LAUNCHER=""
+echo 'PASS early Enter waits for the provider rows'
 
 # Memoization: the actions catalog, then Health, in one open.
 export PROVIDER_SLEEP=0

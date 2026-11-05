@@ -199,6 +199,8 @@ struct Ui {
     moved: bool,
     keymap: Keymap,
     compose: compose::BuiltinCompose,
+    /// Enter was pressed while the rows it should act on were loading.
+    enter_after_load: bool,
 }
 
 fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
@@ -4560,6 +4562,7 @@ impl Ui {
             moved: false,
             keymap,
             compose: compose::BuiltinCompose::default(),
+            enter_after_load: false,
             items,
             filtered,
             usage,
@@ -4696,6 +4699,8 @@ impl Ui {
         } else if self.query.is_empty() {
             if self.mode == "agent" {
                 "Type a short prompt…".to_string()
+            } else if let Some(hint) = mode_hint(&self.mode, self.web_mode) {
+                format!("{title} · {hint}")
             } else {
                 title.to_string()
             }
@@ -4824,6 +4829,22 @@ impl Ui {
                     .max(pad);
             self.renderer
                 .line(&self.c, self.gc, dx, baseline, &detail, detail_colour, bg)?;
+        }
+        if self.filtered.is_empty() && self.no_match_state() {
+            let width = ((self.width as i16 - pad * 2) / self.renderer.advance.max(1)).max(1);
+            for (line, text) in no_match_lines(&self.query).iter().enumerate() {
+                let y = header_h + line as i16 * row;
+                let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
+                self.renderer.line(
+                    &self.c,
+                    self.gc,
+                    pad,
+                    baseline,
+                    &truncate(text, width),
+                    pal.muted,
+                    pal.background,
+                )?;
+            }
         }
         let footer = if let Some(action) = &self.confirm {
             format!(
@@ -5769,6 +5790,36 @@ impl Ui {
         self.confirm = None;
     }
 
+    /// A search that found nothing in a view where the web is the next stop.
+    fn no_match_state(&self) -> bool {
+        !self.query.trim().is_empty()
+            && !self.web_mode
+            && self.catalog_rx.is_none()
+            && !matches!(
+                self.mode.as_str(),
+                "agent" | "share-pair" | "wifi" | "wired"
+            )
+    }
+
+    /// Tab with no matches: keep the text and show the web-search engines in
+    /// this window (Super+S cannot reach the window manager while the
+    /// launcher holds the keyboard).
+    fn switch_to_web_search(&mut self) -> Result<()> {
+        self.catalog_rx = None;
+        self.mode = "search".into();
+        self.web_mode = true;
+        self.number_edit = None;
+        self.profile_name = None;
+        self.recent = 0..0;
+        self.plain_items = 0;
+        self.items.clear();
+        self.filtered.clear();
+        self.selected = 0;
+        self.offset = 0;
+        self.refilter();
+        self.draw()
+    }
+
     /// Merge provider rows that finished loading. The selection stays on the
     /// same row when the user already moved it, and a pending confirmation
     /// survives only while that row is still the selected one.
@@ -5860,6 +5911,7 @@ impl Ui {
         self.catalog_for = mode.to_string();
         self.catalog_favorites = false;
         self.moved = false;
+        self.enter_after_load = false;
         self.items = catalog.items;
         self.plain_items = self.items.len();
         self.web_mode = false;
@@ -6116,6 +6168,13 @@ impl Ui {
                 continue;
             }
             if self.catalog_rx.is_some() && self.poll_catalog()? {
+                if self.catalog_rx.is_none()
+                    && std::mem::take(&mut self.enter_after_load)
+                    && !self.activate()?
+                {
+                    self.close()?;
+                    return Ok(());
+                }
                 continue;
             }
             let event = match self.c.poll_for_event()? {
@@ -6190,7 +6249,16 @@ impl Ui {
                             true
                         }
                         0xff0d | 0xff8d => {
-                            if !self.activate()? {
+                            // Enter before the provider rows arrived acts on
+                            // the best match once they are there.
+                            let waiting = self.catalog_rx.is_some()
+                                && self
+                                    .filtered
+                                    .get(self.selected)
+                                    .map_or(true, |&index| is_pending(&self.items[index]));
+                            if waiting {
+                                self.enter_after_load = true;
+                            } else if !self.activate()? {
                                 self.close()?;
                                 return Ok(());
                             }
@@ -6220,6 +6288,10 @@ impl Ui {
                         0xff56 => {
                             self.move_selection(self.rows.max(1) as i32);
                             self.draw()?;
+                            true
+                        }
+                        0xff09 if self.filtered.is_empty() && self.no_match_state() => {
+                            self.switch_to_web_search()?;
                             true
                         }
                         0xff09 => {
@@ -6339,6 +6411,31 @@ fn savable_argv(target: &Target) -> std::result::Result<&[String], &'static str>
         Target::Info => Err("Info rows cannot be saved as actions"),
         Target::Focus(_) => Err("Window switches cannot be saved as actions"),
     }
+}
+
+/// The empty-query hint after a view's title.
+fn mode_hint(mode: &str, web: bool) -> Option<&'static str> {
+    if web {
+        return Some("type a phrase or an address");
+    }
+    Some(match mode {
+        "apps" => "type an app, a keyword or 2+2",
+        "actions" => "type an action, window, app or 2+2",
+        "system-actions" => "type an action or 2+2",
+        "windows" => "type a window title",
+        "sound" => "type to filter devices and event sounds",
+        "share-pair" | "wifi" | "wired" | "agent" => return None,
+        _ => "type to filter",
+    })
+}
+
+/// What an empty result list says instead of nothing.
+fn no_match_lines(query: &str) -> [String; 2] {
+    let query: String = query.trim().chars().take(48).collect();
+    [
+        format!("No matches. Press Super+S to search the web for ‘{query}’"),
+        "Tab: switch view to web search · Backspace: edit · Esc: close".into(),
+    ]
 }
 
 /// The `=` row for an arithmetic query, if the query is one.
