@@ -730,11 +730,12 @@ fn nm_connect(
 
 fn wpa_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     let link = iw_link(interface);
+    let (hard_blocked, soft_blocked) = rfkill_state();
     let mut snap = Snapshot {
         present: true,
         interface: interface.into(),
         manager: "wpa_supplicant".into(),
-        powered: !rfkill_state().0 && !rfkill_state().1,
+        powered: !hard_blocked && !soft_blocked,
         connected: link.connected,
         ssid: link.ssid.clone(),
         signal: link.signal,
@@ -767,8 +768,16 @@ fn wpa_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     } else if let Some(error) = status.err() {
         snap.error = error;
     }
+    // One list_networks per snapshot: the scan marks saved networks with the
+    // same answer that adds the saved-only rows below. Each helper call goes
+    // through sudo and is written to the auth log.
+    let saved = wpa_saved(interface);
     if scan {
-        match wpa_scan(interface) {
+        let saved_ssids: HashSet<String> = saved
+            .as_ref()
+            .map(|items| items.iter().map(|(ssid, _)| ssid.clone()).collect())
+            .unwrap_or_default();
+        match wpa_scan(interface, &saved_ssids) {
             Ok(mut networks) => {
                 for network in &mut networks {
                     if snap.connected && network.ssid == snap.ssid {
@@ -788,7 +797,7 @@ fn wpa_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
             Err(error) => snap.error = error,
         }
     }
-    if let Ok(saved) = wpa_saved(interface) {
+    if let Ok(saved) = saved {
         for (ssid, _) in &saved {
             if !snap.saved.contains(ssid) {
                 snap.saved.push(ssid.clone());
@@ -806,14 +815,11 @@ fn wpa_snapshot(interface: &str, scan: bool) -> Result<Snapshot, String> {
     Ok(snap)
 }
 
-fn wpa_scan(interface: &str) -> Result<Vec<Network>, String> {
+fn wpa_scan(interface: &str, saved: &HashSet<String>) -> Result<Vec<Network>, String> {
     wpa_run(interface, &["scan"])?;
     std::thread::sleep(Duration::from_millis(1200));
     let output = wpa_run(interface, &["scan_results"])?;
     let text = String::from_utf8_lossy(&output.stdout);
-    let saved: HashSet<String> = wpa_saved(interface)
-        .map(|items| items.into_iter().map(|(ssid, _)| ssid).collect())
-        .unwrap_or_default();
     let mut networks: HashMap<(String, String), Network> = HashMap::new();
     for line in text.lines().skip(1) {
         let mut fields = line.splitn(5, '\t');
