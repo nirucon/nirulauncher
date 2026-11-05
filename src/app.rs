@@ -1,6 +1,5 @@
 //! The launcher's shared types and how a row starts a program.
 
-#[allow(unused_imports)]
 use crate::*;
 
 #[derive(Clone, Copy)]

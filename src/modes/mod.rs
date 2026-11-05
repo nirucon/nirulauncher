@@ -1,7 +1,6 @@
 //! The views. Each view paints its rows that need no provider at once and
 //! loads the rest in a worker ([`view_catalog`]).
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) mod actions;

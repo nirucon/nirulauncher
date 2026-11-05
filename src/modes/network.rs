@@ -1,6 +1,5 @@
 //! Wi-Fi and wired network views.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) fn wifi_items(snapshot: &wifi::Snapshot) -> Vec<Item> {
@@ -785,28 +784,7 @@ impl Ui {
 }
 
 #[cfg(test)]
-mod search_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{filtered, Item, Target};
-
-    const DAY: u64 = 86_400;
-
-    fn row(group: &str, name: &str, detail: &str) -> Item {
-        Item {
-            key: format!("{group}:{name}"),
-            group: group.into(),
-            name: name.into(),
-            detail: detail.into(),
-            keywords: String::new(),
-            favorite: false,
-            target: Target::Info,
-        }
-    }
-
-    fn names(items: &[Item], order: &[usize]) -> Vec<String> {
-        order.iter().map(|&i| items[i].name.clone()).collect()
-    }
-
+mod wifi_view_tests {
     /// The dedicated mode lists every provider before anything is typed, and
     /// no applications at all.
     #[test]

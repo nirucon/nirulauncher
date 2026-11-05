@@ -1,7 +1,6 @@
 //! System providers shared by several views: programs on PATH, the NIRUX
 //! generation and update cache, and saved actions.
 
-#[allow(unused_imports)]
 use crate::*;
 
 /// Provider queries in a view switch must not own the UI indefinitely.

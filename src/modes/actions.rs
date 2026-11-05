@@ -1,6 +1,5 @@
 //! The actions catalogue and the small views built from niructl actions.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) fn tailscale_items() -> Vec<Item> {
@@ -1705,11 +1704,7 @@ mod intent_launcher_tests {
 }
 
 #[cfg(test)]
-mod input_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{apply_caps, keyboard_level, keyboard_symbol};
-
-    use x11rb::protocol::xproto::KeyButMask;
+mod action_list_tests {
 
     #[test]
     fn action_list_includes_workspace_ten() {

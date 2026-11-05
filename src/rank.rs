@@ -1,6 +1,5 @@
 //! Ranking: matching rows against a query, favourites and launch history.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) fn usage_path() -> std::path::PathBuf {
@@ -442,11 +441,7 @@ pub(crate) fn mark_favorites(items: &mut [Item], cfg: &Config) {
 }
 
 #[cfg(test)]
-mod input_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{apply_caps, keyboard_level, keyboard_symbol};
-
-    use x11rb::protocol::xproto::KeyButMask;
+mod favourite_tests {
 
     fn searchable(key: &str, group: &str, name: &str) -> crate::Item {
         crate::Item {
@@ -485,7 +480,6 @@ mod input_tests {
 
 #[cfg(test)]
 mod search_tests {
-    #![allow(dead_code, unused_imports)]
     use crate::{filtered, Item, Target};
 
     const DAY: u64 = 86_400;

@@ -1,6 +1,5 @@
 //! The Sound and microphone views, including event and per-app sounds.
 
-#[allow(unused_imports)]
 use crate::*;
 
 /// Keyboard-accessible input controls. Device IDs and state come from niructl;
@@ -915,11 +914,7 @@ mod event_sound_tests {
 }
 
 #[cfg(test)]
-mod input_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{apply_caps, keyboard_level, keyboard_symbol};
-
-    use x11rb::protocol::xproto::KeyButMask;
+mod device_name_tests {
 
     #[test]
     fn long_device_names_are_shortened() {

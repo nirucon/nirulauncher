@@ -20,6 +20,8 @@ mod ui;
 mod usage;
 mod websearch;
 
+// The crate prelude: every module starts with `use crate::*;` and so sees the
+// shared types, the views and these imports without long paths.
 use app::*;
 use input::*;
 use modes::{actions::*, apps::*, audio::*, clip::*, health::*, settings::*, web::*, *};

@@ -1,6 +1,5 @@
 //! Settings views: displays, Bluetooth, themes, keybindings, timing and input.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) fn bluetooth_items() -> Vec<Item> {
@@ -870,11 +869,7 @@ pub(crate) fn input_items() -> Vec<Item> {
 }
 
 #[cfg(test)]
-mod input_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{apply_caps, keyboard_level, keyboard_symbol};
-
-    use x11rb::protocol::xproto::KeyButMask;
+mod settings_tests {
 
     #[test]
     fn suspend_and_search_shortcuts_have_readable_names() {

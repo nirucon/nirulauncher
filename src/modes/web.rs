@@ -1,6 +1,5 @@
 //! The dedicated web-search rows.
 
-#[allow(unused_imports)]
 use crate::*;
 
 /// The complete row list for the dedicated web-search mode.
@@ -48,28 +47,7 @@ pub(crate) fn web_rows(query: &str, catalog: &websearch::Catalog) -> Vec<Item> {
 }
 
 #[cfg(test)]
-mod search_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{filtered, Item, Target};
-
-    const DAY: u64 = 86_400;
-
-    fn row(group: &str, name: &str, detail: &str) -> Item {
-        Item {
-            key: format!("{group}:{name}"),
-            group: group.into(),
-            name: name.into(),
-            detail: detail.into(),
-            keywords: String::new(),
-            favorite: false,
-            target: Target::Info,
-        }
-    }
-
-    fn names(items: &[Item], order: &[usize]) -> Vec<String> {
-        order.iter().map(|&i| items[i].name.clone()).collect()
-    }
-
+mod web_rows_tests {
     #[test]
     fn an_empty_search_lists_only_providers() {
         let catalog = crate::websearch::catalog(&[], &[], None, &[]);

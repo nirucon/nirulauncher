@@ -1,6 +1,5 @@
 //! Keyboard input: the cached keymap, levels, Caps Lock and text keys.
 
-#[allow(unused_imports)]
 use crate::*;
 
 /// Ctrl+Backspace: drop the last word and the spaces after it.
@@ -133,7 +132,6 @@ impl Keymap {
 
 #[cfg(test)]
 mod input_tests {
-    #![allow(dead_code, unused_imports)]
     use crate::{apply_caps, keyboard_level, keyboard_symbol};
 
     use x11rb::protocol::xproto::KeyButMask;

@@ -1,6 +1,5 @@
 //! Capture (NIRUCLIP) rows.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) fn clip_profiles() -> Vec<(String, String, String, String, String)> {

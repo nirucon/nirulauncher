@@ -1,6 +1,5 @@
 //! The launcher window: opening, drawing, keys and the event loop.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) struct Ui {
@@ -1697,11 +1696,7 @@ pub(crate) fn no_match_lines(query: &str) -> [String; 2] {
 }
 
 #[cfg(test)]
-mod input_tests {
-    #![allow(dead_code, unused_imports)]
-    use crate::{apply_caps, keyboard_level, keyboard_symbol};
-
-    use x11rb::protocol::xproto::KeyButMask;
+mod x11_tests {
 
     #[test]
     #[ignore = "requires a private X server without another window manager"]

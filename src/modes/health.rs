@@ -1,6 +1,5 @@
 //! The Health overview.
 
-#[allow(unused_imports)]
 use crate::*;
 
 /// The Health rows. The view shows [`health_static_items`] at once and these

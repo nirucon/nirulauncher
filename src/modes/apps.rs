@@ -1,6 +1,5 @@
 //! Applications and open windows.
 
-#[allow(unused_imports)]
 use crate::*;
 
 pub(crate) fn app_items(apps: Vec<desktop::App>) -> Vec<Item> {
