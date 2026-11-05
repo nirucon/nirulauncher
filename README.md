@@ -32,7 +32,7 @@ nirulauncher --actions
 nirulauncher --system-actions     # focused NIRU Actions view (Super+A)
 nirulauncher --windows
 nirulauncher --microphone
-nirulauncher --sound              # output, input, applications and microphone test
+nirulauncher --sound              # output, input, applications, event sounds and microphone test
 nirulauncher --clip               # capture profiles, overlays, recovery and status
 nirulauncher --health             # installed/running, session, audio, network, display, capture
 nirulauncher --agent              # short OpenCode prompt, then a centred TUI
@@ -235,7 +235,38 @@ named by `browser` in the launcher config, else NIRUWM's `browser`, else
 
 Application matching accepts several words in any order, reads `.desktop`
 `Keywords`, `GenericName` and `Comment`, and adds conservative fuzzy matching
-after exact, prefix and word matches. Favourites still come first.
+after exact, prefix and word matches. Favourites still come first. Matching
+ignores diacritics (`e` finds `é`, `a` finds `å` and `ä`) but ranks a match on
+the exact text first. The matched letters are underlined; a row found only
+through a keyword names that word, dimmed, after its name.
+
+Launch history (`usage.tsv`, the last 500 launches) orders rows whose text
+match is equally good: a row launched often and recently comes first, while a
+better text match always wins. With an empty field, up to five recent rows
+(marked ↺) follow the favourites in the applications and actions views. Set
+`rank_by_usage = false` to turn both off.
+
+An arithmetic query (`2+2*3`, `(1920/1080)`, `15% of 240`) shows one `= result`
+row first; Enter copies the result with `xclip`. Only numbers, `+ - * / ^`,
+parentheses and percentages are evaluated, never anything else. A search with
+no matches says so; Tab then shows the web-search engines with the same text.
+
+Keys: ↑↓ and Tab move, PageUp/PageDown page, Home/End jump to the first and
+last row, Ctrl+Backspace deletes a word. Dead keys compose (`´` then `e` is
+`é`; the dead key then space or twice gives the accent itself), and AltGr
+levels come from the XKB layout.
+
+Every view paints at once: rows that need a provider (`niructl`, `niruclip`,
+`nirux status`) show "…" and arrive from a worker, each provider query asked
+once per open. Enter pressed before they arrive acts on the best match then.
+
+**Sound** also lists event and per-app notification sounds from
+`nirux sounds status --json`: all event sounds on/off, each event on/off with
+a test, and per app (for example Thunderbird → mail, Signal → chat) its state,
+a sound list (the `*.ogg` names in `~/.config/nirux/sounds` and the NIRUX
+sounds, plus Default and Off), Test and Remove. **App: add an app…** suggests
+names from recent notifications. Changes run `nirux sounds …`; the launcher
+never edits `sounds.toml`. An older NIRUX shows "Event sounds unavailable".
 
 **NIRUX Settings** groups the existing tools: Appearance and themes, Wallpaper,
 Displays, Audio, Keybindings and Idle and lock timing. **Appearance and themes**
@@ -254,8 +285,9 @@ are configured in `~/.config/nirulauncher/config.toml`; launch recency is stored
 under `~/.local/state/nirulauncher/`. Colours and font come from
 `~/.config/niruwm/config.toml`.
 
-Current limits: no input-method framework, English `Name` keys, and Latin-1-only
-keysym text. Shift, Caps Lock and AltGr are handled, including Swedish letters.
+Current limits: no input-method framework, English `Name` keys, and Latin-1
+text plus the dead-key compositions above (no locale Compose file). Shift,
+Caps Lock and AltGr are handled, including Swedish letters.
 
 ## NIRUX suite
 
@@ -267,7 +299,10 @@ keysym text. Shift, Caps Lock and AltGr are handled, including Swedish letters.
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test -- --test-threads=1
-sh tests/ui-smoke.sh
+sh tests/ui-smoke.sh target/release/nirulauncher
+sh tests/theme-colors.sh target/release/nirulauncher
+sh tests/first-paint.sh target/release/nirulauncher   # 150 ms first paint, memoized providers
+sh tests/event-sounds.sh target/release/nirulauncher  # Sound view through a fake nirux
 ```
 
 MIT. Copyright 2026 Nicklas Rudolfsson.
