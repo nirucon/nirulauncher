@@ -3859,6 +3859,82 @@ impl SearchFields {
     }
 }
 
+/// The part of a row a query matched, for drawing.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Highlight {
+    /// Character positions in `Item::label()` to underline.
+    positions: Vec<usize>,
+    /// A keyword or detail word, when the visible label did not match.
+    keyword: Option<String>,
+}
+
+/// Where each query term matched a row: a substring of the label (exact,
+/// then with diacritics folded), else its letters in order, else a word from
+/// the keywords or detail.
+fn highlight(item: &Item, query: &str) -> Highlight {
+    // One lowercase character per label character, so positions line up.
+    let lower: Vec<char> = item
+        .label()
+        .chars()
+        .map(|ch| ch.to_lowercase().next().unwrap_or(ch))
+        .collect();
+    let folded: Vec<char> = lower.iter().map(|&ch| compose::fold_char(ch)).collect();
+    let mut found = Highlight::default();
+    for term in query.to_lowercase().split_whitespace() {
+        let term: Vec<char> = term.chars().collect();
+        let term_folded: Vec<char> = term.iter().map(|&ch| compose::fold_char(ch)).collect();
+        let at = |haystack: &[char], needle: &[char]| {
+            (needle.len() <= haystack.len())
+                .then(|| {
+                    // Prefer a match at the start of a word.
+                    let starts: Vec<usize> = (0..=haystack.len() - needle.len())
+                        .filter(|&start| haystack[start..start + needle.len()] == *needle)
+                        .collect();
+                    starts
+                        .iter()
+                        .copied()
+                        .find(|&start| start == 0 || !haystack[start - 1].is_alphanumeric())
+                        .or_else(|| starts.first().copied())
+                })
+                .flatten()
+        };
+        if let Some(start) = at(&lower, &term).or_else(|| at(&folded, &term_folded)) {
+            found.positions.extend(start..start + term.len());
+            continue;
+        }
+        if term.len() >= 3 {
+            let mut positions = Vec::new();
+            let mut wanted = term_folded.iter().peekable();
+            for (index, ch) in folded.iter().enumerate() {
+                if wanted.peek() == Some(&ch) {
+                    positions.push(index);
+                    wanted.next();
+                }
+            }
+            if wanted.peek().is_none() {
+                found.positions.extend(positions);
+                continue;
+            }
+        }
+        if found.keyword.is_none() {
+            let wanted: String = term_folded.iter().collect();
+            found.keyword = item
+                .keywords
+                .split_whitespace()
+                .chain(item.detail.split_whitespace())
+                .find(|word| compose::fold(&word.to_lowercase()).contains(&wanted))
+                .map(|word| {
+                    word.trim_matches(|ch: char| !ch.is_alphanumeric())
+                        .to_string()
+                })
+                .filter(|word| !word.is_empty());
+        }
+    }
+    found.positions.sort_unstable();
+    found.positions.dedup();
+    found
+}
+
 /// The ordered rows for a query, and which of them form the "Recent" block.
 struct Ranked {
     order: Vec<usize>,
@@ -4693,6 +4769,51 @@ impl Ui {
             let name = truncate(&label, name_width);
             self.renderer
                 .line(&self.c, self.gc, pad, baseline, &name, name_colour, bg)?;
+            // Why the row is here: the matched letters are underlined, and a
+            // row found only through its keywords or detail names the word.
+            if !self.query.trim().is_empty() && !self.web_mode && self.mode != "agent" {
+                let found = highlight(item, &self.query);
+                let shift = label.chars().count() - item.label().chars().count();
+                let shown = name.chars().count();
+                let advance = self.renderer.advance;
+                let thickness = (self.renderer.line_height / 14).max(1);
+                for position in found.positions {
+                    let column = position + shift;
+                    // The last visible column may be the truncation mark.
+                    if column + 1 >= shown && shown < label.chars().count() {
+                        continue;
+                    }
+                    if column >= shown {
+                        continue;
+                    }
+                    self.renderer.fill(
+                        &self.c,
+                        self.gc,
+                        Rectangle {
+                            x: pad + column as i16 * advance,
+                            y: baseline + 2,
+                            width: advance.max(1) as u16,
+                            height: thickness as u16,
+                        },
+                        pal.foreground,
+                    )?;
+                }
+                if let Some(word) = found.keyword {
+                    let room = name_width - shown as i16 - 1;
+                    if room >= 4 {
+                        let hint = truncate(&word, room);
+                        self.renderer.line(
+                            &self.c,
+                            self.gc,
+                            pad + (shown as i16 + 1) * advance,
+                            baseline,
+                            &hint,
+                            pal.disabled,
+                            bg,
+                        )?;
+                    }
+                }
+            }
             let detail = truncate(&item.detail, detail_width);
             let dx =
                 (self.width as i16 - pad - detail.chars().count() as i16 * self.renderer.advance)
@@ -7092,6 +7213,35 @@ mod search_tests {
 
     fn names(items: &[Item], order: &[usize]) -> Vec<String> {
         order.iter().map(|&i| items[i].name.clone()).collect()
+    }
+
+    #[test]
+    fn the_matched_part_of_a_row_is_highlighted() {
+        let item = row("Applications", "Firefox", "Web browser");
+        // "Applications · Firefox": the name starts at column 15.
+        let found = super::highlight(&item, "fire");
+        assert_eq!(found.positions, vec![15, 16, 17, 18]);
+        assert_eq!(found.keyword, None);
+        // A word start wins over an earlier inner match.
+        let item = row("", "Spotify Spot", "");
+        assert_eq!(super::highlight(&item, "spot").positions, vec![0, 1, 2, 3]);
+        // A subsequence shows each matched letter.
+        let item = row("", "Thunderbird", "");
+        assert_eq!(super::highlight(&item, "tbd").positions, vec![0, 7, 10]);
+        // Folded: e marks É.
+        let item = row("", "Écran", "");
+        assert_eq!(super::highlight(&item, "ecr").positions, vec![0, 1, 2]);
+        // Only a keyword matched: name the keyword, underline nothing.
+        let mut item = row("Applications", "Kitty", "kitty.desktop");
+        item.keywords = "terminal shell tty".into();
+        let found = super::highlight(&item, "shell");
+        assert!(found.positions.is_empty());
+        assert_eq!(found.keyword.as_deref(), Some("shell"));
+        let item = row("Audio", "Volume +5%", "Raise the default output volume");
+        assert_eq!(
+            super::highlight(&item, "raise").keyword.as_deref(),
+            Some("Raise")
+        );
     }
 
     #[test]
