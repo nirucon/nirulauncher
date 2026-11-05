@@ -35,6 +35,7 @@ jobs:
           sh tests/ui-smoke.sh target/x86_64-unknown-linux-musl/release/nirulauncher
           sh tests/theme-colors.sh target/x86_64-unknown-linux-musl/release/nirulauncher
           sh tests/first-paint.sh target/x86_64-unknown-linux-musl/release/nirulauncher
+          sh tests/event-sounds.sh target/x86_64-unknown-linux-musl/release/nirulauncher
       - name: Collect assets
         run: |
           mkdir -p dist
