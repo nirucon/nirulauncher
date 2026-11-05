@@ -1,4 +1,4 @@
-//! NIRULANCHER — native application and desktop-action launcher.
+//! NIRULAUNCHER — native application and desktop-action launcher.
 //!
 //! Keyboard-driven, one process per invocation. No indexing daemon, no network
 //! and no shell: applications are started from argv arrays parsed from their
@@ -51,7 +51,7 @@ fn main() {
     let arg = args.first().map(String::as_str).unwrap_or("--apps");
     let result = match arg {
         "--version" => {
-            println!("NIRULANCHER {}", env!("CARGO_PKG_VERSION"));
+            println!("NIRULAUNCHER {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         "--check-config" => match Config::load() {

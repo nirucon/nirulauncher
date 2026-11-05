@@ -75,7 +75,7 @@ impl Renderer {
                 .iter()
                 .any(|f| f.depth == depth && f.bits_per_pixel == 32)
         {
-            return Err("NIRULANCHER currently requires a 24/32-bit TrueColor X screen".into());
+            return Err("NIRULAUNCHER currently requires a 24/32-bit TrueColor X screen".into());
         }
         let size = font_size;
         let scaled = font.as_scaled(PxScale::from(size));
