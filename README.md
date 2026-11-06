@@ -261,8 +261,10 @@ Every view paints at once: rows that need a provider (`niructl`, `niruclip`,
 once per open. Enter pressed before they arrive acts on the best match then.
 
 **Sound** also lists event and per-app notification sounds from
-`nirux sounds status --json`: all event sounds on/off, each event on/off with
-a test, and per app (for example Thunderbird → mail, Signal → chat) its state,
+`nirux sounds status --json`: all event sounds on/off, then every category
+NIRUX reports (system, notifications, feedback, power, devices) with its own
+on/off and each of its events on/off with a test; an older NIRUX without
+categories shows its four events. Per app (for example Thunderbird → mail, Signal → chat) its state,
 a sound list (the `*.ogg` names in `~/.config/nirux/sounds` and the NIRUX
 sounds, plus Default and Off), Test and Remove. **App: add an app…** suggests
 names from recent notifications. Changes run `nirux sounds …`; the launcher

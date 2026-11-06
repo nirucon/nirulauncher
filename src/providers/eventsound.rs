@@ -6,37 +6,36 @@
 //! time limit; nothing goes through a shell.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The sound events NIRUX knows, in the order they are shown.
-pub const EVENTS: [&str; 4] = ["startup", "notification", "update", "shutdown"];
+/// The events an older NIRUX (no categories in its status) knows.
+pub const LEGACY_EVENTS: [&str; 4] = ["startup", "notification", "update", "shutdown"];
+
+/// NIRUX sound categories, in the order they are shown. A category NIRUX
+/// reports that is not listed here is shown after these.
+pub const CATEGORY_ORDER: [&str; 5] = ["system", "notifications", "feedback", "power", "devices"];
 
 /// A `nirux sounds` call must not keep the Sound view busy for long.
 const BUDGET_SECS: &str = "5";
 
+/// Every event NIRUX reports, by name, with whether it is on.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
-pub struct Events {
-    #[serde(default)]
-    pub startup: bool,
-    #[serde(default)]
-    pub notification: bool,
-    #[serde(default)]
-    pub update: bool,
-    #[serde(default)]
-    pub shutdown: bool,
-}
+pub struct Events(pub BTreeMap<String, bool>);
 
 impl Events {
     pub fn get(&self, event: &str) -> bool {
-        match event {
-            "startup" => self.startup,
-            "notification" => self.notification,
-            "update" => self.update,
-            "shutdown" => self.shutdown,
-            _ => false,
-        }
+        self.0.get(event).copied().unwrap_or(false)
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct Category {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub events: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -61,10 +60,45 @@ pub struct Status {
     pub config: String,
     #[serde(default)]
     pub events: Events,
+    /// Present from NIRUX 0.12.219; empty on older versions.
+    #[serde(default)]
+    pub categories: BTreeMap<String, Category>,
     #[serde(default)]
     pub exclude: Vec<String>,
     #[serde(default)]
     pub apps: Vec<App>,
+}
+
+/// One shown category: its name and whether it is on (`None` for an older
+/// NIRUX without categories), then its events.
+pub type Group = (Option<(String, bool)>, Vec<String>);
+
+impl Status {
+    /// The categories to show, with their events, in display order. An older
+    /// NIRUX without categories yields one unnamed group of its four events.
+    pub fn groups(&self) -> Vec<Group> {
+        if self.categories.is_empty() {
+            return vec![(None, LEGACY_EVENTS.iter().map(|e| e.to_string()).collect())];
+        }
+        let mut names: Vec<&String> = self.categories.keys().collect();
+        let rank = |name: &str| {
+            CATEGORY_ORDER
+                .iter()
+                .position(|c| *c == name)
+                .unwrap_or(usize::MAX)
+        };
+        names.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.cmp(b)));
+        names
+            .into_iter()
+            .map(|name| {
+                let category = &self.categories[name];
+                (
+                    Some((name.clone(), category.enabled)),
+                    category.events.clone(),
+                )
+            })
+            .collect()
+    }
 }
 
 /// Parse `nirux sounds status --json`. Anything but schema 1 is treated as

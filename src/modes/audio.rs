@@ -372,24 +372,47 @@ pub(crate) fn event_sound_items(
         ),
         Target::Info,
     ));
-    for event in eventsound::EVENTS {
-        let on = status.events.get(event);
-        items.push(event_row(
-            format!("events:toggle:{event}"),
-            format!("Event {event}: {}", onoff(on)),
-            if status.enabled {
-                format!("Enter turns the {event} sound {}", onoff(!on))
-            } else {
-                "Every event sound is off".into()
-            },
-            Target::Info,
-        ));
-        items.push(event_row(
-            format!("events:test:{event}"),
-            format!("Event {event}: test"),
-            format!("Play the {event} sound now"),
-            Target::Info,
-        ));
+    for (category, events) in status.groups() {
+        let category_on = match &category {
+            Some((name, on)) => {
+                items.push(event_row(
+                    format!("events:category:{name}"),
+                    format!("Category {name}: {}", onoff(*on)),
+                    if status.enabled {
+                        format!("Enter turns every {name} sound {}", onoff(!on))
+                    } else {
+                        "Every event sound is off".into()
+                    },
+                    Target::Info,
+                ));
+                *on
+            }
+            None => true,
+        };
+        for event in &events {
+            let on = status.events.get(event);
+            items.push(event_row(
+                format!("events:toggle:{event}"),
+                format!("Event {event}: {}", onoff(on)),
+                if !status.enabled {
+                    "Every event sound is off".into()
+                } else if !category_on {
+                    format!(
+                        "Its category is off · Enter turns the {event} sound {}",
+                        onoff(!on)
+                    )
+                } else {
+                    format!("Enter turns the {event} sound {}", onoff(!on))
+                },
+                Target::Info,
+            ));
+            items.push(event_row(
+                format!("events:test:{event}"),
+                format!("Event {event}: test"),
+                format!("Play the {event} sound now"),
+                Target::Info,
+            ));
+        }
     }
     let mut apps = status.apps.clone();
     apps.sort_by(|a, b| a.app.cmp(&b.app));
@@ -705,6 +728,11 @@ impl Ui {
                 .into(),
                 eventsound::set_enabled(on),
             )
+        } else if let Some(category) = key.strip_prefix("events:category:") {
+            change(
+                format!("Switching the {category} sounds…"),
+                eventsound::toggle_event(category),
+            )
         } else if let Some(event) = key.strip_prefix("events:toggle:") {
             change(
                 format!("Switching the {event} sound…"),
@@ -874,6 +902,57 @@ mod event_sound_tests {
         assert_eq!(find("events:app-remove:signal").name, "App Signal: remove");
         assert_eq!(find("events:add").name, "App: add an app…");
         assert!(rows.iter().all(|row| row.group == "Event sounds"));
+    }
+
+    const FIXTURE_219: &str = r#"{"schema":1,"enabled":true,"volume":35,"config":"/nonexistent/sounds.toml","events":{"startup":true,"notification":true,"volume-up":true,"brightness-up":false,"power-plug":true},"categories":{"power":{"enabled":false,"events":["power-plug"]},"feedback":{"enabled":true,"events":["volume-up","brightness-up"]},"system":{"enabled":true,"events":["startup"]},"notifications":{"enabled":true,"events":["notification"]}},"exclude":[],"apps":[]}"#;
+
+    #[test]
+    fn the_sound_view_lists_every_category_and_event_nirux_reports() {
+        let status = crate::eventsound::parse(FIXTURE_219.as_bytes()).unwrap();
+        let rows = event_sound_items(Some(&Ok(status)), None);
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        let pos = |key: &str| {
+            keys.iter()
+                .position(|k| *k == key)
+                .unwrap_or_else(|| panic!("missing {key}"))
+        };
+        assert!(pos("events:category:system") < pos("events:category:notifications"));
+        assert!(pos("events:category:notifications") < pos("events:category:feedback"));
+        assert!(pos("events:category:feedback") < pos("events:category:power"));
+        assert!(pos("events:category:feedback") < pos("events:toggle:volume-up"));
+        assert!(pos("events:toggle:volume-up") < pos("events:category:power"));
+        let find = |key: &str| &rows[pos(key)];
+        assert_eq!(find("events:category:power").name, "Category power: off");
+        assert_eq!(
+            find("events:toggle:brightness-up").name,
+            "Event brightness-up: off"
+        );
+        assert_eq!(
+            find("events:toggle:power-plug").name,
+            "Event power-plug: on"
+        );
+        assert!(find("events:toggle:power-plug")
+            .detail
+            .starts_with("Its category is off"));
+        assert_eq!(find("events:test:volume-up").name, "Event volume-up: test");
+        assert!(
+            !keys.contains(&"events:toggle:update"),
+            "only reported events are shown"
+        );
+    }
+
+    #[test]
+    fn an_older_nirux_shows_its_four_events_without_categories() {
+        let status = crate::eventsound::parse(FIXTURE.as_bytes()).unwrap();
+        let rows = event_sound_items(Some(&Ok(status)), None);
+        assert!(rows
+            .iter()
+            .all(|row| !row.key.starts_with("events:category:")));
+        for event in ["startup", "notification", "update", "shutdown"] {
+            assert!(rows
+                .iter()
+                .any(|row| row.key == format!("events:toggle:{event}")));
+        }
     }
 
     #[test]
