@@ -202,6 +202,19 @@ pub(crate) fn share_items() -> Vec<Item> {
             },
         });
     }
+    // Discord webhooks (NIRUSHARE 0.4.0+): one row per configured name. A
+    // row opens a preview view; nothing is sent from this list.
+    for name in discord_webhooks() {
+        items.push(Item {
+            key: format!("share:discord:{name}"),
+            group: "NIRU Share".into(),
+            name: format!("Share {noun} to Discord · {name}"),
+            detail: "Preview first · Undo for 5 minutes".into(),
+            keywords: format!("share discord webhook channel {name} {noun}"),
+            favorite: false,
+            target: Target::Mode(format!("{DISCORD_MODE}{name}")),
+        });
+    }
     items.push(Item {
         key: "share:clipboard:email".into(),
         group: "NIRU Share".into(),
@@ -251,6 +264,189 @@ pub(crate) fn share_items() -> Vec<Item> {
         });
     }
     items
+}
+
+/// The view that previews one item for one Discord webhook:
+/// `share-discord:NAME`.
+pub(crate) const DISCORD_MODE: &str = "share-discord:";
+
+/// Configured webhook names, from `nirushare discord list --json` (names
+/// only; NIRUSHARE never prints webhook URLs). Older NIRUSHARE versions
+/// without the command give an empty list.
+fn discord_webhooks() -> Vec<String> {
+    providers::output("nirushare", &["discord", "list", "--json"])
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+        .map(|v| parse_discord_names(&v))
+        .unwrap_or_default()
+}
+
+pub(crate) fn parse_discord_names(v: &serde_json::Value) -> Vec<String> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|h| h.get("name").and_then(|n| n.as_str()))
+        .filter(|n| {
+            !n.is_empty()
+                && n.len() <= 32
+                && n.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// Stage the clipboard (or the pending NIRUSHOT file) for `name` and show
+/// the preview NIRUSHARE returns. The staged content is exactly what Send
+/// posts, even if the clipboard changes meanwhile.
+pub(crate) fn share_discord_items(name: &str) -> Vec<Item> {
+    let mut args: Vec<String> = vec![
+        "discord".into(),
+        "preview".into(),
+        "--to".into(),
+        name.into(),
+        "--json".into(),
+    ];
+    match std::env::var("NIRUSHARE_SEND_FILE")
+        .ok()
+        .filter(|p| !p.is_empty())
+    {
+        Some(file) => {
+            args.push("--file".into());
+            args.push(file);
+        }
+        None => args.push("--clipboard".into()),
+    }
+    // Not memoised: every visit stages the current content again.
+    let out = std::process::Command::new("nirushare")
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .output();
+    let preview = match out {
+        Ok(out) if out.status.success() => serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .map_err(|_| "NIRU Share 0.4.0 or newer is needed for Discord".to_string()),
+        Ok(out) => Err(String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .last()
+            .unwrap_or("NIRU Share could not prepare the preview")
+            .trim_start_matches("nirushare: ")
+            .to_string()),
+        Err(_) => Err("NIRU Share is not installed".to_string()),
+    };
+    discord_preview_rows(name, preview)
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// The rows of the preview view. Information rows come first; Send is a
+/// separate row the user has to choose, then Cancel.
+pub(crate) fn discord_preview_rows(
+    name: &str,
+    preview: std::result::Result<serde_json::Value, String>,
+) -> Vec<Item> {
+    let group = "Discord".to_string();
+    let info = |key: &str, title: String, detail: String| Item {
+        key: format!("share:discord:{name}:{key}"),
+        group: group.clone(),
+        name: title,
+        detail,
+        keywords: String::new(),
+        favorite: false,
+        target: Target::Info,
+    };
+    let back = Item {
+        key: format!("share:discord:{name}:cancel"),
+        group: group.clone(),
+        name: "Cancel".into(),
+        detail: "Back to Share · nothing is sent".into(),
+        keywords: "cancel back".into(),
+        favorite: false,
+        target: Target::Mode("share".into()),
+    };
+    let v = match preview {
+        Ok(v) => v,
+        Err(e) => return vec![info("error", "Cannot send to Discord".into(), e), back],
+    };
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default();
+    let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let mut rows = Vec::new();
+    let who = v
+        .get("username")
+        .and_then(|u| u.as_str())
+        .map(|u| format!(" as {u}"))
+        .unwrap_or_default();
+    rows.push(info(
+        "target",
+        format!("To: {name}"),
+        format!("{}{who}", s("host")),
+    ));
+    let what = match s("kind") {
+        "text" => format!("Text · {} characters", n("characters")),
+        "link" => "Link".to_string(),
+        "image" => format!("Image {} · {}", s("name"), size_text(n("bytes"))),
+        _ => format!("File {} · {}", s("name"), size_text(n("bytes"))),
+    };
+    let how = match v.get("attachment").and_then(|a| a.as_str()) {
+        Some(file) => format!("one message with {file} attached"),
+        None if n("messages") == 1 => "one message".to_string(),
+        None => format!("{} messages", n("messages")),
+    };
+    rows.push(info("content", what, how));
+    let excerpt = s("excerpt");
+    if !excerpt.is_empty() {
+        let short: String = excerpt.chars().take(120).collect();
+        rows.push(info(
+            "excerpt",
+            format!("“{short}”"),
+            if v.get("embeds") == Some(&serde_json::Value::Bool(false)) {
+                "Link previews off".into()
+            } else {
+                "Preview".into()
+            },
+        ));
+    }
+    let stage = s("stage");
+    let stage_ok = !stage.is_empty()
+        && stage
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if v.get("too_large") == Some(&serde_json::Value::Bool(true)) {
+        rows.push(info(
+            "too-large",
+            "Too large for Discord".into(),
+            format!("This webhook allows {} MB", n("max_file_mb")),
+        ));
+    } else if stage_ok {
+        rows.push(Item {
+            key: format!("share:discord:{name}:send"),
+            group: group.clone(),
+            name: format!("Send to {name}"),
+            detail: "Undo in the notification for 5 minutes".into(),
+            keywords: "send confirm discord".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec![
+                    "nirushare".into(),
+                    "discord".into(),
+                    "confirm".into(),
+                    stage.to_string(),
+                ],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    rows.push(back);
+    rows
 }
 
 pub(crate) fn share_pair_items() -> Vec<Item> {
@@ -1715,5 +1911,79 @@ mod action_list_tests {
                 && item.name == "Workspace 10"
         }));
         assert!(items.iter().any(|item| item.key == "action:reset-bar"));
+    }
+}
+
+#[cfg(test)]
+mod discord_tests {
+    use super::*;
+
+    #[test]
+    fn webhook_names_are_taken_only_when_valid() {
+        let v = serde_json::json!([
+            {"name": "friends", "host": "discord.com"},
+            {"name": "bad name"},
+            {"name": "x;rm"},
+            {"nope": 1},
+            {"name": "work-log_2"}
+        ]);
+        assert_eq!(parse_discord_names(&v), vec!["friends", "work-log_2"]);
+        assert!(parse_discord_names(&serde_json::json!({"error": "x"})).is_empty());
+    }
+
+    #[test]
+    fn the_preview_comes_before_send_and_send_confirms_the_stage() {
+        let v = serde_json::json!({
+            "stage": "1730970000-abcd1234", "to": "discord:friends", "webhook": "friends",
+            "host": "discord.com", "username": "Niru", "embeds": true, "kind": "text",
+            "name": "clipboard.txt", "bytes": 4100, "characters": 4100, "messages": 3,
+            "attachment": null, "excerpt": "hello world", "too_large": false, "max_file_mb": 10
+        });
+        let rows = discord_preview_rows("friends", Ok(v));
+        assert_eq!(rows[0].label(), "Discord · To: friends");
+        assert!(rows[0].detail.contains("as Niru"));
+        assert!(matches!(rows[0].target, Target::Info));
+        assert!(rows[1].name.contains("4100 characters"));
+        assert_eq!(rows[1].detail, "3 messages");
+        let send = rows
+            .iter()
+            .position(|r| r.name.starts_with("Send"))
+            .unwrap();
+        assert!(send >= 2, "information first");
+        match &rows[send].target {
+            Target::Spawn { argv, .. } => assert_eq!(
+                argv,
+                &["nirushare", "discord", "confirm", "1730970000-abcd1234"]
+            ),
+            _ => panic!("send spawns nirushare"),
+        }
+        assert!(matches!(&rows.last().unwrap().target, Target::Mode(m) if m == "share"));
+        // The view keeps this order; ranking must not sort Cancel to the top.
+        let order =
+            crate::rank::filtered_for_mode(&rows, "", &Default::default(), "share-discord:friends");
+        assert_eq!(order, (0..rows.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn nothing_to_send_when_too_large_or_failed() {
+        let v = serde_json::json!({
+            "stage": "1-a", "host": "discord.com", "kind": "file", "name": "big.iso",
+            "bytes": 52428800u64, "messages": 1, "attachment": "big.iso",
+            "too_large": true, "max_file_mb": 10
+        });
+        let rows = discord_preview_rows("friends", Ok(v));
+        assert!(!rows.iter().any(|r| r.name.starts_with("Send")));
+        assert!(rows.iter().any(|r| r.name == "Too large for Discord"));
+        let rows = discord_preview_rows(
+            "friends",
+            Err("no Discord webhook named \"friends\"".into()),
+        );
+        assert_eq!(rows.len(), 2);
+        assert!(!rows.iter().any(|r| r.name.starts_with("Send")));
+        // A stage id that is not a plain id is never passed on.
+        let v = serde_json::json!({"stage": "1 --yes", "kind": "link", "messages": 1});
+        assert!(!discord_preview_rows("x", Ok(v))
+            .iter()
+            .any(|r| r.name.starts_with("Send")));
     }
 }

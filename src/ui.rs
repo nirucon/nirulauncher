@@ -445,6 +445,8 @@ impl Ui {
             "Quick Settings"
         } else if self.mode == "share-pair" {
             "Pair NIRU Share device"
+        } else if self.mode.starts_with(DISCORD_MODE) {
+            "Send to Discord?"
         } else if self.items.iter().all(|item| item.group == "NIRU Share") {
             "NIRU Share"
         } else if self.items.iter().all(|item| item.group == "Clipboard") {

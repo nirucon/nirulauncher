@@ -382,6 +382,14 @@ pub(crate) fn ranked_for_mode(
             recent: 0..0,
         };
     }
+    if mode.starts_with(crate::modes::actions::DISCORD_MODE) && query.trim().is_empty() {
+        // The Discord preview reads top to bottom: target, content, text,
+        // then Send and Cancel. Ranking must not reorder it.
+        return Ranked {
+            order: (0..items.len()).collect(),
+            recent: 0..0,
+        };
+    }
     if mode == "system-actions" && query.trim().is_empty() {
         let mut order: Vec<usize> = (0..items.len()).collect();
         order.sort_by_key(|index| {

@@ -97,13 +97,24 @@ Each view can be opened directly:
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
 | `--clip` | NIRUCLIP capture profiles, overlays, recovery and status |
-| `--share`, `--share-pair` | NIRUSHARE inbox and pairing |
+| `--share`, `--share-pair` | NIRUSHARE devices, inbox, pairing and Discord webhooks |
 | `--health` | Installed/running, session, audio, network, display and capture status |
 | `--agent` | Short OpenCode prompt, then a centred terminal |
 
 Non-interactive helpers: `--list`, `--list-actions`, `--list-search`,
 `--wifi-status`, `--wifi-scan`, `--wired-status`, `--check-config` and
 `--version`.
+
+**Share and Discord.** With NIRUSHARE 0.4.0 or newer, the Share view lists
+every Discord webhook configured in `~/.config/nirushare/webhooks.toml` as
+*Share clipboard to Discord · NAME* (or *Share image …* when NIRUSHOT's review
+opened the view with a screenshot). Choosing one never sends anything: it
+opens a preview view that shows the target, the content, its size, how many
+messages it becomes and the start of the text. **Send to Discord · NAME**
+posts exactly what the preview showed; **Cancel** goes back to Share. The
+"Sent to Discord" notification has **Undo** for 5 minutes. The launcher only
+ever sees webhook names, never their URLs. With an older NIRUSHARE the
+Discord rows simply do not appear.
 
 The complete behaviour of every view (actions catalogue, intent phrases,
 Wi-Fi, wired networking, web search, sound and settings) is described in

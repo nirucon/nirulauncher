@@ -34,6 +34,7 @@ pub(crate) fn pending_item(mode: &str) -> Item {
         "microphone" => ("Audio", "Loading microphones…"),
         "bluetooth" => ("Bluetooth", "Loading Bluetooth…"),
         "share" => ("NIRU Share", "Loading NIRU Share…"),
+        m if m.starts_with(DISCORD_MODE) => ("Discord", "Preparing the preview…"),
         "tailscale" => ("Tailscale", "Loading Tailscale peers…"),
         "displays" => ("Displays", "Loading displays…"),
         "power" => ("Power", "Loading power profiles…"),
@@ -107,6 +108,10 @@ pub(crate) fn view_catalog(
         "agent" => ready(agent_items()),
         "share" => job(Box::new(share_items), Vec::new()),
         "share-pair" => ready(share_pair_items()),
+        m if m.starts_with(DISCORD_MODE) => {
+            let name = m[DISCORD_MODE.len()..].to_string();
+            job(Box::new(move || share_discord_items(&name)), Vec::new())
+        }
         "quick" => ready(quick_items()),
         "clipboard" => ready(clipboard_items()),
         "tailscale" => job(Box::new(tailscale_items), Vec::new()),
