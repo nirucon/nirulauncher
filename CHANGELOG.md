@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.0 (2026-11-08)
+
+- **Keybinding cheat sheet** (`--keys`, NIRUWM's new `Super+/`). Rows come
+  from `niructl keys --json` (NIRUWM 0.18.0): an English description for
+  every action, your own `[[keys]] description`, and the keys other programs
+  register in `~/.local/share/niru/keys.d`. Grouped with headings; search by
+  words or by key (`super+t`, `ctrl alt space`); Enter runs the binding
+  (`niructl keys run`) or a registered program's command; Ctrl+R shows what a
+  pressed combination does or that it is free; clashes are marked *conflict*
+  and the footer names the other program. An older niructl still gives the
+  plain list.
+- **Emoji and symbol picker** (`--emoji`, NIRUWM's new `Super+.`): Unicode
+  16.0 emoji and 85 text symbols (©, ®, ™, arrows, °, ±, currency signs,
+  typographic quotes) with English and Swedish CLDR names and keywords,
+  compiled in (`data/emoji.tsv`, Unicode License v3). Color emoji are drawn
+  from Noto Color Emoji's CBDT bitmaps (ttf-parser, png), shaped with the
+  font's own ligatures, scaled once and cached; the font is memory-mapped and
+  only opened when the first emoji row is drawn. Recents first; Tab and
+  Shift+Tab cycle the skin tone (remembered). Enter pastes into the previous
+  window and then restores the clipboard with every format it held;
+  Shift+Enter only copies. `:name` in the unified view offers the best eight.
+- **Colors view** (`--colors`, also *Colors* in NIRU Actions): the last ten
+  colors from `~/.local/state/nirushot/colors.json` with swatches; Enter
+  copies the hex. *Pick color* runs `nirushot pick` (NIRUSHOT 0.6.0).
+- Characters the monospaced font lacks fall back to DejaVu Sans.
+- New tests: `tests/pickers.sh` (emoji copy, tone, recents, Colors, cheat
+  sheet Enter) in CI and the release workflow; first-paint covers the new
+  views.
+- install.sh installs this release by default.
+
 ## 0.4.0 (2026-11-07)
 
 - Share view: one row per Discord webhook configured in NIRUSHARE

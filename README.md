@@ -31,6 +31,13 @@ second, competing settings implementation.
   Swedish and more, without any model or network.
 - Settings views: Wi-Fi, wired Ethernet, Bluetooth, sound and event sounds,
   microphone, displays, power, themes, timing, input, key bindings and Health.
+- Keybinding cheat sheet (`Super+/`): every key in effect with words, search
+  by words or keys, Enter runs a binding, Ctrl+R tells what a key does,
+  clashes are marked.
+- Emoji and symbol picker (`Super+.`, or `:name` in the unified view): color
+  emoji, ©, ®, ™, arrows, °, ±, currency and typographic quotes, English and
+  Swedish names, recents first, skin tones, pasted where you were typing.
+- Colors view: the last colors picked with `nirushot pick` (`Super+Ctrl+C`).
 - Calculator row (`2+2*3`, `15% of 240`), copied with Enter.
 - Optional OpenCode handoff through `niructl agent`, never auto-approved.
 - HiDPI scaling from `Xft.dpi`, dead-key composition and AltGr levels.
@@ -39,7 +46,8 @@ second, competing settings implementation.
 
 - Debian, Arch or Void Linux (glibc), x86_64, with X11.
 - A monospaced font through fontconfig, or `font_path`.
-- Optional: `niructl` (NIRUWM) for actions and settings, NetworkManager or
+- Optional: Noto Color Emoji for color emoji (without it the picker shows
+  names and the text symbols), `niructl` (NIRUWM) for actions and settings, NetworkManager or
   `wpa_supplicant` for Wi-Fi, `xclip` for the calculator, `opencode` for the
   agent handoff.
 - Building from source: Rust and `cargo`.
@@ -76,6 +84,8 @@ Default NIRUWM keys:
 | `Super+A` | NIRU Actions |
 | `Super+S` | Web search |
 | `Super+V` | Clipboard history |
+| `Super+/` | Keybinding cheat sheet |
+| `Super+.` | Emoji and symbols |
 | `Alt+Tab`, `Super+W`, `Super+grave` | Window switcher |
 
 Inside the launcher: ↑/↓ and Tab move, PageUp/PageDown page, Home/End jump,
@@ -92,8 +102,11 @@ Each view can be opened directly:
 | `--search [PHRASE]` | Web search, optionally with the phrase filled in |
 | `--quick` | Quick Settings |
 | `--clipboard` | Clipboard history |
+| `--keys` | Keybinding cheat sheet |
+| `--emoji` | Emoji and symbol picker |
+| `--colors` | The last picked colors, and Pick color |
 | `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing |
-| `--themes`, `--displays`, `--power`, `--timing`, `--input`, `--keys` | Single settings views |
+| `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
 | `--clip` | NIRUCLIP capture profiles, overlays, recovery and status |
@@ -115,6 +128,39 @@ posts exactly what the preview showed; **Cancel** goes back to Share. The
 "Sent to Discord" notification has **Undo** for 5 minutes. The launcher only
 ever sees webhook names, never their URLs. With an older NIRUSHARE the
 Discord rows simply do not appear.
+
+**Keybinding cheat sheet (`Super+/`).** Every key in effect, from
+`niructl keys --json` (NIRUWM 0.18 or newer): NIRUWM's bindings, including
+your own `[[keys]]` with their optional `description`, and the keys other
+programs register in `~/.local/share/niru/keys.d` (see NIRUWM's
+KEYBINDINGS.md). The list is grouped; type words (`scratchpad`) or a key
+(`super+t`, `ctrl alt space`) to search. **Enter** runs the selected binding
+as if the key were pressed (`niructl keys run`), or the command a registered
+program gave for its key. **Ctrl+R**, then a key combination, shows what it
+does or that it is free. A key two programs claim is marked *conflict*; the
+footer names the other one. With an older NIRUWM the view shows the plain list
+as before.
+
+**Emoji and symbols (`Super+.`).** About 1 900 emoji (Unicode 16.0) and 85
+text symbols (©, ®, ™, arrows, °, ±, ×, currency signs, typographic quotes,
+dashes, no-break space), with English and Swedish names and keywords from
+Unicode CLDR, compiled into the program. Recently used ones come first.
+
+- **Enter** pastes into the window you were typing in, then gives the
+  clipboard back as it was (every format it held, images too). Terminals get
+  Ctrl+Shift+V, xterm-like terminals Shift+Insert. If nothing takes the paste,
+  the emoji stays on the clipboard.
+- **Shift+Enter** only copies.
+- **Tab** / **Shift+Tab** cycle the skin tone of the emoji that have one; the
+  choice is remembered.
+- In the unified view (`Super+Shift+P`), `:heart` shows the best eight matches.
+
+Color emoji are drawn from Noto Color Emoji's bitmaps, scaled once per row
+size; the font is only read when the first emoji row is shown.
+
+**Colors.** `--colors` (or *Colors* in NIRU Actions) lists the last ten colors
+NIRUSHOT picked, newest first, with a swatch; Enter copies the hex value.
+*Pick color* runs `nirushot pick` (also `Super+Ctrl+C`).
 
 The complete behaviour of every view (actions catalogue, intent phrases,
 Wi-Fi, wired networking, web search, sound and settings) is described in
@@ -159,6 +205,8 @@ it. Check a file with `nirulauncher --check-config`.
 |---|---|
 | `~/.config/nirulauncher/config.toml` | Launcher settings |
 | `~/.local/state/nirulauncher/usage.tsv` | Launch history (last 500 launches) |
+| `~/.local/state/nirulauncher/emoji-recent.txt`, `emoji-tone` | Recent emoji and the chosen skin tone |
+| `~/.local/state/nirushot/colors.json` | Picked colors (written by NIRUSHOT, read here) |
 | `~/.config/niruwm/config.toml` | Theme, font and browser fallback |
 | `~/.local/bin/nirulauncher` | Program |
 
@@ -170,6 +218,12 @@ it. Check a file with `nirulauncher --check-config`.
 - **Wi-Fi cannot connect through iwd or ConnMan.** They are detected but not
   controlled; use NetworkManager or `wpa_supplicant`.
 - **Text is tiny or huge.** Set `NIRU_UI_SCALE`.
+- **Emoji are names without pictures.** Install Noto Color Emoji
+  (`fonts-noto-color-emoji`, `noto-fonts-emoji`); `NIRU_EMOJI_FONT=/path` points
+  at another CBDT font.
+- **An emoji was not pasted.** Some programs ignore synthetic keys; the emoji
+  is then left on the clipboard for Ctrl+V. A clipboard history may record the
+  emoji for a moment while it is pasted.
 - **A web search engine opens the wrong browser.** Set `browser` in the
   launcher config.
 
@@ -230,3 +284,8 @@ that's a nice bonus.
 ## License
 
 MIT License, see [LICENSE](LICENSE). Copyright (c) 2026 Nicklas Rudolfsson.
+
+The emoji names and keywords in `data/emoji.tsv` come from Unicode
+emoji-test.txt 16.0 and CLDR 46 annotations, © Unicode, Inc., under the
+Unicode License v3 ([data/LICENSE-UNICODE.txt](data/LICENSE-UNICODE.txt));
+`tools/gen-emoji.py` rebuilds the file.

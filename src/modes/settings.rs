@@ -568,7 +568,7 @@ pub(crate) fn settings_items() -> Vec<Item> {
             key: "settings:keys".into(),
             group: "NIRUX Settings".into(),
             name: "Keybindings".into(),
-            detail: "Every active shortcut".into(),
+            detail: "Every active shortcut · Super+/".into(),
             keywords: "settings keyboard keybindings shortcuts".into(),
             favorite: false,
             target: mode("keys"),

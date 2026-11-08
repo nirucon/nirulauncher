@@ -53,7 +53,7 @@ window() { xdotool search --name '^NIRULANCHER$' 2>/dev/null | head -1; }
 
 export PROVIDER_SLEEP=2
 for mode in apps actions system-actions health displays keys themes timing \
-  input microphone bluetooth power clip tailscale share settings sound wifi; do
+  input microphone bluetooth power clip tailscale share settings sound wifi emoji colors; do
   start=$(now_ms)
   "$BIN" "--$mode" >"$T/out" 2>"$T/err" &
   LAUNCHER=$!

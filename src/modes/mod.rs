@@ -7,7 +7,10 @@ pub(crate) mod actions;
 pub(crate) mod apps;
 pub(crate) mod audio;
 pub(crate) mod clip;
+pub(crate) mod colors;
+pub(crate) mod emoji;
 pub(crate) mod health;
+pub(crate) mod keys;
 pub(crate) mod network;
 pub(crate) mod settings;
 pub(crate) mod web;
@@ -121,7 +124,9 @@ pub(crate) fn view_catalog(
         // Dedicated web search: the provider rows are the whole list and are
         // built from the query, including when it is empty.
         "search" | "wifi" | "wired" => ready(Vec::new()),
-        "keys" => job(Box::new(shortcut_items), Vec::new()),
+        "keys" => job(Box::new(keys_items), Vec::new()),
+        "emoji" => ready(emoji_items()),
+        "colors" => ready(colors_items()),
         "settings" => ready(settings_items()),
         "themes" => job(Box::new(theme_items), Vec::new()),
         "timing" => job(Box::new(timing_items), Vec::new()),

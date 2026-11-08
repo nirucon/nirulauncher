@@ -75,6 +75,17 @@ pub(crate) struct Ui {
     pub(crate) events_busy: Option<String>,
     pub(crate) sound_pick: Option<SoundPick>,
     pub(crate) events_suggestions: Option<Vec<String>>,
+    /// Emoji skin tone, 0 (none) to 5, cycled with Tab in the picker.
+    pub(crate) tone: u8,
+    /// Noto Color Emoji, opened when the first emoji row is drawn.
+    pub(crate) emoji_font: Option<Option<emoji_font::EmojiFont>>,
+    /// Ctrl+R in the cheat sheet: the next key combination is looked up.
+    pub(crate) capture: bool,
+    /// Shift was held with the Enter that activates a row.
+    pub(crate) enter_shift: bool,
+    /// Text to paste into the previous window once this one has closed.
+    pub(crate) paste_after: Option<String>,
+    pub(crate) closed: bool,
 }
 
 pub(crate) fn intern(c: &RustConnection, name: &str) -> Result<Atom> {
@@ -355,6 +366,16 @@ impl Ui {
             events_busy: None,
             sound_pick: None,
             events_suggestions: None,
+            tone: if matches!(mode, "emoji" | "apps" | "actions" | "system-actions") {
+                emoji::load_tone()
+            } else {
+                0
+            },
+            emoji_font: None,
+            capture: false,
+            enter_shift: false,
+            paste_after: None,
+            closed: false,
             items,
             filtered,
             usage,
@@ -418,6 +439,12 @@ impl Ui {
             "Confirm"
         } else if self.mode == "agent" {
             "Ask OpenCode"
+        } else if self.mode == "keys" {
+            "Keybindings"
+        } else if self.mode == "emoji" {
+            "Emoji and symbols"
+        } else if self.mode == "colors" {
+            "Colors"
         } else if self.web_mode {
             "Search the web"
         } else if self.items.iter().all(|item| item.group == "Shortcuts") {
@@ -524,7 +551,8 @@ impl Ui {
             .min(self.filtered.len().saturating_sub(self.offset));
         for line in 0..visible {
             let index = self.filtered[self.offset + line];
-            let item = &self.items[index];
+            let item = self.items[index].clone();
+            let item = &item;
             let y = header_h + line as i16 * row;
             let selected = self.offset + line == self.selected;
             let bg = if selected {
@@ -556,10 +584,26 @@ impl Ui {
                     pal.accent,
                 )?;
             }
-            let name_colour = pal.foreground;
+            let heading = keys::is_heading(item);
+            let name_colour = if heading { pal.accent } else { pal.foreground };
             let detail_colour = pal.muted;
             let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
-            let label = if item.favorite {
+            let icon = row_icon(item, self.tone);
+            let icon_cols = if icon.is_some() {
+                ((row - 6) / self.renderer.advance.max(1)) + 2
+            } else {
+                0
+            };
+            let gap = " ".repeat(icon_cols.max(0) as usize);
+            // Icon rows and the grouped cheat sheet show the name alone.
+            let name_only = icon.is_some() || self.mode == "keys";
+            let label = if heading {
+                item.name.clone()
+            } else if self.mode == "keys" {
+                format!("  {}", item.name)
+            } else if icon.is_some() {
+                format!("{gap}{}", item.name)
+            } else if item.favorite {
                 format!("★ {}", item.label())
             } else if self.query.trim().is_empty() && self.recent.contains(&(self.offset + line)) {
                 format!("{} {}", self.recent_mark, item.label())
@@ -576,7 +620,31 @@ impl Ui {
             // row found only through its keywords or detail names the word.
             if !self.query.trim().is_empty() && !self.web_mode && self.mode != "agent" {
                 let found = highlight(item, &self.query);
-                let shift = label.chars().count() - item.label().chars().count();
+                let shown_label = if name_only {
+                    item.name.clone()
+                } else {
+                    item.label()
+                };
+                let shift = label
+                    .chars()
+                    .count()
+                    .saturating_sub(shown_label.chars().count());
+                let found = if name_only {
+                    // The group is not shown on these rows, so only name
+                    // positions can be marked.
+                    let group = item.label().chars().count() - item.name.chars().count();
+                    Highlight {
+                        positions: found
+                            .positions
+                            .into_iter()
+                            .filter(|p| *p >= group)
+                            .map(|p| p - group)
+                            .collect(),
+                        keyword: found.keyword,
+                    }
+                } else {
+                    found
+                };
                 let shown = name.chars().count();
                 let advance = self.renderer.advance;
                 let thickness = (self.renderer.line_height / 14).max(1);
@@ -616,6 +684,9 @@ impl Ui {
                         )?;
                     }
                 }
+            }
+            if let Some(icon) = icon {
+                self.draw_icon(icon, pad, y, row, bg)?;
             }
             let detail = truncate(&item.detail, detail_width);
             let dx =
@@ -683,8 +754,23 @@ impl Ui {
             "Enter starts or stops capture · Esc close · ↑↓ move".to_string()
         } else if self.web_mode {
             "Enter opens search · Tab moves · Esc closes".to_string()
+        } else if self.mode == "keys" && self.capture {
+            "Press a key combination to see what it does · Esc cancels".to_string()
+        } else if let Some(note) = (self.mode == "keys")
+            .then(|| self.filtered.get(self.selected))
+            .flatten()
+            .and_then(|&i| keys::note(&self.items[i]))
+        {
+            note.to_string()
         } else if self.mode == "keys" {
-            "Esc close · ↑↓ move · type to search".to_string()
+            "Enter runs · Ctrl+R: what does a key do? · type words or keys · Esc close".to_string()
+        } else if self.mode == "emoji" {
+            format!(
+                "Enter pastes · Shift+Enter copies · Tab skin tone: {} · Esc close",
+                emoji::tone_name(self.tone)
+            )
+        } else if self.mode == "colors" {
+            "Enter copies the hex value · Esc close".to_string()
         } else if self.mode == "settings" {
             "Enter opens · Esc close · ↑↓ move".to_string()
         } else if self.mode == "themes" {
@@ -722,6 +808,105 @@ impl Ui {
             .present(&self.c, self.gc, self.win, self.width)?;
         self.c.flush()?;
         Ok(())
+    }
+
+    /// Draw a row's icon in the cell before its name.
+    pub(crate) fn draw_icon(
+        &mut self,
+        icon: Icon,
+        x: i16,
+        y: i16,
+        row: i16,
+        bg: u32,
+    ) -> Result<()> {
+        let size = (row - 6).max(8) as u16;
+        let top = y + (row - size as i16) / 2;
+        let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
+        match icon {
+            Icon::Swatch(colour) => {
+                let rect = |dx: i16, d: u16| Rectangle {
+                    x: x + dx,
+                    y: top + dx,
+                    width: size - d,
+                    height: size - d,
+                };
+                self.renderer
+                    .fill(&self.c, self.gc, rect(0, 0), self.cfg.palette.muted)?;
+                self.renderer.fill(&self.c, self.gc, rect(1, 2), colour)?;
+            }
+            Icon::Emoji(text) => {
+                if self.emoji_font.is_none() {
+                    self.emoji_font = Some(emoji_font::EmojiFont::open(
+                        std::env::var("NIRU_EMOJI_FONT").ok().as_deref(),
+                    ));
+                }
+                let picture = self
+                    .emoji_font
+                    .as_mut()
+                    .and_then(|f| f.as_mut())
+                    .and_then(|f| f.picture(&text, size));
+                match picture {
+                    Some(p) => self
+                        .renderer
+                        .image(&self.c, self.gc, x, top, p.size, &p.pixels, bg)?,
+                    None => self.renderer.line(
+                        &self.c,
+                        self.gc,
+                        x,
+                        baseline,
+                        &text,
+                        self.cfg.palette.foreground,
+                        bg,
+                    )?,
+                }
+            }
+            Icon::Glyph(text) => {
+                let shown: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+                let shown = if shown.is_empty() {
+                    "␣".to_string()
+                } else {
+                    shown
+                };
+                self.renderer.line(
+                    &self.c,
+                    self.gc,
+                    x + self.renderer.advance / 2,
+                    baseline,
+                    &shown,
+                    self.cfg.palette.foreground,
+                    bg,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Ctrl+R in the cheat sheet: show what the pressed combination does.
+    pub(crate) fn captured(&mut self, mods: u32, sym: u32) -> Result<()> {
+        self.capture = false;
+        let label = keys::combo_label(mods, sym);
+        let token = keys::token(mods, sym);
+        let bound: Vec<String> = self
+            .items
+            .iter()
+            .filter(|item| {
+                item.keywords
+                    .split(keys::NOTE)
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .any(|w| w == token)
+            })
+            .map(|item| item.name.clone())
+            .collect();
+        self.query = label.to_lowercase();
+        self.refilter();
+        self.error = if bound.is_empty() {
+            format!("{label} is not bound: it is free")
+        } else {
+            format!("{label}: {}", bound.join(" · "))
+        };
+        self.draw()
     }
 
     /// Save the selected command row as a persistent action. The launcher only
@@ -992,6 +1177,7 @@ impl Ui {
             calc_row(&self.query)
                 .into_iter()
                 .chain(intent_items(&self.query))
+                .chain(emoji::colon_rows(&self.query))
                 .collect()
         } else {
             Vec::new()
@@ -1020,6 +1206,14 @@ impl Ui {
             }
         }
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+        if self
+            .filtered
+            .get(self.selected)
+            .is_some_and(|&i| keys::is_heading(&self.items[i]))
+            && self.selected + 1 < self.filtered.len()
+        {
+            self.selected += 1;
+        }
         self.offset = 0;
     }
 
@@ -1027,8 +1221,21 @@ impl Ui {
         if self.filtered.is_empty() {
             return;
         }
-        let next = (self.selected as i32 + delta).clamp(0, self.filtered.len() as i32 - 1) as usize;
-        self.selected = next;
+        let last = self.filtered.len() as i32 - 1;
+        let mut next = (self.selected as i32 + delta).clamp(0, last);
+        // Group headings in the cheat sheet are skipped.
+        let step = if delta < 0 { -1 } else { 1 };
+        while keys::is_heading(&self.items[self.filtered[next as usize]]) {
+            let after = next + step;
+            if !(0..=last).contains(&after) {
+                if next == 0 && last > 0 {
+                    next = 1;
+                }
+                break;
+            }
+            next = after;
+        }
+        self.selected = next as usize;
         self.moved = true;
         if self.selected < self.offset {
             self.offset = self.selected;
@@ -1046,7 +1253,7 @@ impl Ui {
             && self.catalog_rx.is_none()
             && !matches!(
                 self.mode.as_str(),
-                "agent" | "share-pair" | "wifi" | "wired"
+                "agent" | "share-pair" | "wifi" | "wired" | "keys" | "emoji" | "colors"
             )
     }
 
@@ -1123,6 +1330,14 @@ impl Ui {
             }
         } else {
             self.selected = 0;
+            if self
+                .filtered
+                .first()
+                .is_some_and(|&i| keys::is_heading(&self.items[i]))
+                && self.filtered.len() > 1
+            {
+                self.selected = 1;
+            }
         }
         self.reveal_selection();
         self.draw()?;
@@ -1200,7 +1415,40 @@ impl Ui {
                 return Ok(keep);
             }
         }
+        if key.starts_with(emoji::KEY_PREFIX) {
+            let Some(text) = emoji::with_tone(key, self.tone) else {
+                return Ok(true);
+            };
+            emoji::record_recent(key);
+            if self.enter_shift {
+                return match copy_to_clipboard(&text) {
+                    Ok(()) => Ok(false),
+                    Err(e) => {
+                        self.error = e;
+                        self.draw()?;
+                        Ok(true)
+                    }
+                };
+            }
+            self.paste_after = Some(text);
+            return Ok(false);
+        }
         match target {
+            Target::RunKey(keys) => {
+                // Close first: the binding may open the launcher again, and
+                // an action on "the focused window" must find that window.
+                self.close()?;
+                let _ = self.c.get_input_focus()?.reply();
+                if let Err(e) = spawn_command(
+                    &["niructl".to_string(), "keys".into(), "run".into(), keys],
+                    None,
+                    false,
+                    &self.cfg,
+                ) {
+                    eprintln!("nirulauncher: {e}");
+                }
+                Ok(false)
+            }
             Target::Confirm(action) => {
                 if self.confirm.is_some() {
                     let commands: Vec<Vec<String>> = match action {
@@ -1396,7 +1644,10 @@ impl Ui {
         self.execute(&key, target)
     }
 
-    pub(crate) fn close(&self) -> Result<()> {
+    pub(crate) fn close(&mut self) -> Result<()> {
+        if std::mem::replace(&mut self.closed, true) {
+            return Ok(());
+        }
         let _ = self.c.ungrab_keyboard(x11rb::CURRENT_TIME);
         let _ = self.c.ungrab_pointer(x11rb::CURRENT_TIME);
         let _ = self
@@ -1455,6 +1706,20 @@ impl Ui {
                 Event::KeyPress(e) => {
                     let shift = e.state.contains(KeyButMask::SHIFT);
                     let sym = self.keymap.symbol(e.detail, e.state);
+                    if self.capture {
+                        let mods = u32::from(e.state.bits()) & keys::MODS;
+                        if keys::is_modifier(sym) {
+                            continue;
+                        }
+                        if sym == 0xff1b && mods == 0 {
+                            self.capture = false;
+                            self.draw()?;
+                            continue;
+                        }
+                        let pressed = keys::pressed_keysym(&self.keymap, e.detail);
+                        self.captured(mods, pressed)?;
+                        continue;
+                    }
                     // Dead keys compose with the next key; function keys
                     // cancel a pending accent and keep their meaning.
                     let key = if compose::is_function(sym) {
@@ -1488,6 +1753,22 @@ impl Ui {
                         self.start_wifi_job("Scanning for networks…".into(), || Ok(()))?;
                         continue;
                     }
+                    if e.state.contains(KeyButMask::CONTROL) && key == 0x72 && self.mode == "keys" {
+                        self.capture = true;
+                        self.draw()?;
+                        continue;
+                    }
+                    if (key == 0xff09 || key == 0xfe20) && self.mode == "emoji" {
+                        let back = shift || key == 0xfe20;
+                        self.tone = if back {
+                            (self.tone + 5) % 6
+                        } else {
+                            (self.tone + 1) % 6
+                        };
+                        emoji::save_tone(self.tone);
+                        self.draw()?;
+                        continue;
+                    }
                     if e.state.contains(KeyButMask::CONTROL) && key == 0x70 {
                         self.toggle_favorite()?;
                         continue;
@@ -1509,6 +1790,7 @@ impl Ui {
                             true
                         }
                         0xff0d | 0xff8d => {
+                            self.enter_shift = shift;
                             // Enter before the provider rows arrived acts on
                             // the best match once they are there.
                             let waiting = self.catalog_rx.is_some()
@@ -1658,6 +1940,26 @@ impl Ui {
         let index = self.offset + line;
         (index < self.filtered.len()).then_some(index)
     }
+}
+
+/// What a row shows before its name: an emoji bitmap, a symbol drawn with
+/// the text font, or a color swatch.
+pub(crate) enum Icon {
+    Emoji(String),
+    Glyph(String),
+    Swatch(u32),
+}
+
+pub(crate) fn row_icon(item: &Item, tone: u8) -> Option<Icon> {
+    if item.key.starts_with(emoji::KEY_PREFIX) {
+        let chars = emoji::with_tone(&item.key, tone)?;
+        return Some(if emoji::is_text_symbol(&item.key) {
+            Icon::Glyph(chars)
+        } else {
+            Icon::Emoji(chars)
+        });
+    }
+    colors::swatch(&item.key).map(Icon::Swatch)
 }
 
 pub(crate) fn truncate(text: &str, max_chars: i16) -> String {

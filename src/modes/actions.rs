@@ -943,6 +943,7 @@ pub(crate) fn sound_action_items() -> Vec<Item> {
 /// in a worker; `--list-actions` and the tests use this complete list.
 pub(crate) fn action_items(cfg: &Config) -> Vec<Item> {
     let mut items = action_command_rows();
+    items.extend(picker_rows());
     items.extend(clip_items());
     items.extend(sound_action_items());
     items.extend(theme_items());
@@ -964,6 +965,7 @@ pub(crate) fn action_items(cfg: &Config) -> Vec<Item> {
 /// The action rows that need no provider query: shown in the first paint.
 pub(crate) fn action_static_items(cfg: &Config) -> Vec<Item> {
     let mut items = action_command_rows();
+    items.extend(picker_rows());
     items.extend(clip_static_items());
     items.extend(sound_action_items());
     items.extend(settings_items());
@@ -986,6 +988,36 @@ pub(crate) fn action_provider_items() -> Vec<Item> {
     items.extend(diagnostic_rows());
     items.extend(recipe_rows());
     items
+}
+
+/// The emoji picker, the Colors view and the color picker.
+pub(crate) fn picker_rows() -> Vec<Item> {
+    let row = |key: &str, name: &str, detail: &str, keywords: &str, mode: &str| Item {
+        key: key.into(),
+        group: "NIRU Actions".into(),
+        name: name.into(),
+        detail: detail.into(),
+        keywords: keywords.into(),
+        favorite: false,
+        target: Target::Mode(mode.into()),
+    };
+    vec![
+        row(
+            "action:emoji",
+            "Emoji and symbols",
+            "Super+. · paste an emoji or ©, →, €",
+            "emoji smiley symbol unicode copyright arrow currency quotes",
+            "emoji",
+        ),
+        row(
+            "action:colors",
+            "Colors",
+            "The last picked colors",
+            "color colour picked history hex swatch färg",
+            "colors",
+        ),
+        crate::modes::colors::pick_item(),
+    ]
 }
 
 pub(crate) fn action_command_rows() -> Vec<Item> {

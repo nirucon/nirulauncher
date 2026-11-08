@@ -9,9 +9,11 @@ mod calc;
 mod compose;
 mod config;
 mod desktop;
+mod emoji_font;
 mod input;
 mod intent;
 mod modes;
+mod paste;
 mod providers;
 mod rank;
 mod render;
@@ -24,7 +26,10 @@ mod websearch;
 // shared types, the views and these imports without long paths.
 use app::*;
 use input::*;
-use modes::{actions::*, apps::*, audio::*, clip::*, health::*, settings::*, web::*, *};
+use modes::{
+    actions::*, apps::*, audio::*, clip::*, colors::*, emoji::*, health::*, keys::*, settings::*,
+    web::*, *,
+};
 use providers::system::*;
 use providers::{eventsound, sound, tailscale, wifi};
 use rank::*;
@@ -93,7 +98,7 @@ fn main() {
                 Ok(mut ui) => {
                     ui.query = phrase;
                     ui.refilter();
-                    ui.run()
+                    run_ui(ui)
                 }
                 Err(e) => Err(e),
             }
@@ -131,7 +136,7 @@ fn main() {
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
         | "--wired" | "--sound" | "--clip" | "--health" | "--agent" | "--share"
-        | "--share-pair" => {
+        | "--share-pair" | "--emoji" | "--colors" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -156,22 +161,24 @@ fn main() {
                 "--sound" => "sound",
                 "--clip" => "clip",
                 "--health" => "health",
+                "--emoji" => "emoji",
+                "--colors" => "colors",
                 _ => "apps",
             };
             match Ui::new(mode) {
-                Ok(mut ui) => ui.run(),
+                Ok(ui) => run_ui(ui),
                 Err(e) => Err(e),
             }
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
             );
             std::process::exit(2);
         }
@@ -180,4 +187,20 @@ fn main() {
         eprintln!("nirulauncher: {e}");
         std::process::exit(1);
     }
+}
+
+/// Run the window; an emoji chosen with Enter is pasted once it has closed.
+fn run_ui(mut ui: Ui) -> Result<()> {
+    ui.run()?;
+    let Some(text) = ui.paste_after.take() else {
+        return Ok(());
+    };
+    let launcher = ui.win;
+    drop(ui);
+    let mut paster = paste::Paster::new()?;
+    if let Err(e) = paster.paste(&text, launcher) {
+        eprintln!("nirulauncher: {e}; the text is on the clipboard instead");
+    }
+    paster.linger();
+    Ok(())
 }

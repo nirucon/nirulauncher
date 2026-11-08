@@ -14,7 +14,7 @@ jobs:
       - run: cargo test --locked -- --test-threads=1
       - name: Native X11 smoke test
         run: |
-          sudo apt-get update && sudo apt-get install -y xvfb xauth xdotool x11-apps x11-utils imagemagick
+          sudo apt-get update && sudo apt-get install -y xvfb xauth xdotool x11-apps x11-utils imagemagick xclip
           xvfb-run -a cargo test --locked focus_waits_for_window_manager_mapping -- --ignored --test-threads=1
           xvfb-run -a cargo test --locked --test lock_handoff -- --ignored --test-threads=1
           cargo build --release --locked
@@ -22,10 +22,11 @@ jobs:
           sh tests/theme-colors.sh target/release/nirulauncher
           sh tests/first-paint.sh target/release/nirulauncher
           sh tests/event-sounds.sh target/release/nirulauncher
+          sh tests/pickers.sh target/release/nirulauncher
       - name: Shellcheck
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
-            -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh /src/tests/first-paint.sh /src/tests/event-sounds.sh
+            -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh /src/tests/first-paint.sh /src/tests/event-sounds.sh /src/tests/pickers.sh
   msrv:
     # The declared rust-version and Debian 13's rustc must build the locked tree.
     runs-on: ubuntu-latest

@@ -235,8 +235,17 @@ opens NIRU Theme Selector when installed and otherwise uses the fast launcher
 theme list. **Displays** opens NIRU Display when installed, otherwise the
 built-in profile view. The theme list is read from `niructl theme-catalog`, so
 user themes appear and hidden bundled themes stay hidden. **Keybindings** is read
-from NIRUWM's active table, so it includes your overrides and leaves out
-explicit unbinds. **Idle and lock timing** shows the effective minutes and lets
+from NIRUWM's active table (`niructl keys --json`), so it includes your
+overrides, leaves out explicit unbinds and lists the keys other programs
+register in `~/.local/share/niru/keys.d`. It is grouped; a heading starts each
+group and is skipped by the arrow keys. Typing a key (`super+t`, `Super T`,
+`ctrl alt space`) puts the row bound to exactly that key first; words search
+descriptions, keys, action names and program names, and `conflict` lists the
+clashes. Enter closes the launcher and runs the binding through
+`niructl keys run KEYS` (NIRUWM runs only keys that are bound, and nothing
+while the screen is locked); a registered program's key runs the argv it gave.
+Ctrl+R waits for a key combination and reports what it does or that it is
+free; Escape alone cancels. **Idle and lock timing** shows the effective minutes and lets
 you type a new value; it is written to the shared `[idle]` section without
 touching other settings or comments.
 
@@ -245,6 +254,16 @@ Applications with `Terminal=true` use the configured terminal argv. Favourites
 are configured in `~/.config/nirulauncher/config.toml`; launch recency is stored
 under `~/.local/state/nirulauncher/`. Colours and font come from
 `~/.config/niruwm/config.toml`.
+
+**Emoji and symbols** (`--emoji`, `Super+.`) searches English and Swedish
+names and CLDR keywords; a name that equals or starts with the whole phrase
+ranks first. An empty field shows the recent emoji (up to 24), then all in
+Unicode order. Enter waits until NIRUWM has given the focus back to the window
+under the launcher, saves every format of the clipboard, offers the emoji,
+sends the paste key with XTest and, once that window has fetched it, offers
+the old clipboard again. The launcher process stays in the background, with no
+window, until another program takes the clipboard. `:name` in the apps and
+actions views adds the best eight matches as the first rows.
 
 Current limits: no input-method framework, English `Name` keys, and Latin-1
 text plus the dead-key compositions above (no locale Compose file). Shift,

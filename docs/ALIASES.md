@@ -27,3 +27,7 @@ to a fixed action in the launcher catalogue.
 | Wi-Fi off | `wifi off` | `stäng av wifi` |
 
 The implemented table is authoritative in `src/intent.rs`.
+
+A query that starts with `:` (`:heart`, `:tummen`) adds the best eight emoji
+and symbols as the first rows; Enter pastes the selected one (see the emoji
+picker in [GUIDE.md](GUIDE.md)).

@@ -44,6 +44,9 @@ pub(crate) enum Target {
     SoundTest(u64),
     /// Copy this text to the clipboard through `xclip`.
     Copy(String),
+    /// Run what a NIRUWM key is bound to (`niructl keys run KEYS`), after
+    /// the launcher has closed and given the focus back.
+    RunKey(String),
     Info,
 }
 
@@ -80,6 +83,7 @@ impl Item {
             Target::Mode(_) => "mode",
             Target::SoundTest(_) => "sound-test",
             Target::Copy(_) => "copy",
+            Target::RunKey(_) => "run-key",
             Target::Info => "info",
         }
     }
@@ -136,6 +140,7 @@ pub(crate) fn savable_argv(target: &Target) -> std::result::Result<&[String], &'
         Target::SoundTest(_) => Err("Microphone tests cannot be saved as actions"),
         Target::Copy(_) => Err("Calculator results cannot be saved as actions"),
         Target::Info => Err("Info rows cannot be saved as actions"),
+        Target::RunKey(_) => Err("Key bindings cannot be saved as actions"),
         Target::Focus(_) => Err("Window switches cannot be saved as actions"),
     }
 }

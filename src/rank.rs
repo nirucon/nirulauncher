@@ -390,6 +390,36 @@ pub(crate) fn ranked_for_mode(
             recent: 0..0,
         };
     }
+    if matches!(mode, "keys" | "emoji" | "colors") && query.trim().is_empty() {
+        // Grouped in NIRUWM's order, recents first, newest color first.
+        return Ranked {
+            order: (0..items.len()).collect(),
+            recent: 0..0,
+        };
+    }
+    if mode == "emoji" {
+        return Ranked {
+            order: crate::modes::emoji::emoji_ranked(items, query),
+            recent: 0..0,
+        };
+    }
+    if mode == "keys" {
+        let mut base = ranked(items, query, usage, false);
+        base.order
+            .retain(|&i| !crate::modes::keys::is_heading(&items[i]));
+        let order = match crate::modes::keys::typed_combo(query) {
+            Some((mods, sym)) => crate::modes::keys::exact_first(
+                items,
+                &crate::modes::keys::token(mods, sym),
+                base.order,
+            ),
+            None => base.order,
+        };
+        return Ranked {
+            order,
+            recent: 0..0,
+        };
+    }
     if mode == "system-actions" && query.trim().is_empty() {
         let mut order: Vec<usize> = (0..items.len()).collect();
         order.sort_by_key(|index| {

@@ -39,6 +39,9 @@ pub struct Renderer {
     back_width: u16,
     pub height: u16,
     masks: HashMap<char, Mask>,
+    /// A proportional font with wider symbol coverage, opened the first time
+    /// a character is missing from the main font (`None` inside: not found).
+    fallback: Option<Option<FontArc>>,
 }
 
 impl Renderer {
@@ -94,6 +97,7 @@ impl Renderer {
             back_width: width.max(1),
             height,
             masks: HashMap::new(),
+            fallback: None,
         })
     }
 
@@ -199,14 +203,24 @@ impl Renderer {
                 y: 0,
                 coverage: Vec::new(),
             };
-            let id = self.font.glyph_id(ch);
+            let mut font = self.font.clone();
+            let mut id = font.glyph_id(ch);
+            if id.0 == 0 && !ch.is_whitespace() {
+                if let Some(other) = self.fallback_font() {
+                    let other_id = other.glyph_id(ch);
+                    if other_id.0 != 0 {
+                        font = other;
+                        id = other_id;
+                    }
+                }
+            }
             // Rasterise on the baseline at (0, 0). `outline.draw` yields
             // coverage samples indexed from the glyph's own top-left corner,
             // while `px_bounds` says where that corner sits relative to the
             // pen. Mixing the two double-applies the offset and clips every
             // glyph; they are kept strictly separate here.
             let glyph = id.with_scale_and_position(self.size, point(0.0, 0.0));
-            if let Some(outline) = self.font.outline_glyph(glyph) {
+            if let Some(outline) = font.outline_glyph(glyph) {
                 let bounds = outline.px_bounds();
                 let w = bounds.width().ceil() as u16;
                 let h = bounds.height().ceil() as u16;
@@ -232,6 +246,86 @@ impl Renderer {
             self.masks.insert(ch, out);
         }
         &self.masks[&ch]
+    }
+
+    fn fallback_font(&mut self) -> Option<FontArc> {
+        if self.fallback.is_none() {
+            let found = FALLBACK_FONTS
+                .iter()
+                .find_map(|p| std::fs::read(p).ok())
+                .and_then(|bytes| FontArc::try_from_vec(bytes).ok());
+            self.fallback = Some(found);
+        }
+        self.fallback.clone().flatten()
+    }
+
+    /// Composite a premultiplied 0xAARRGGBB picture over `bg` at (x, y).
+    #[allow(clippy::too_many_arguments)]
+    pub fn image(
+        &self,
+        c: &RustConnection,
+        gc: Gcontext,
+        x: i16,
+        y: i16,
+        size: u16,
+        pixels: &[u32],
+        bg: u32,
+    ) -> crate::Result<()> {
+        if size == 0 || pixels.len() < usize::from(size) * usize::from(size) {
+            return Ok(());
+        }
+        let (br, bgg, bb) = split(bg);
+        let composed: Vec<u32> = pixels
+            .iter()
+            .map(|&p| {
+                let a = p >> 24;
+                let inv = 255 - a;
+                let mix = |s: u32, b: u32| (s + b * inv / 255).min(255);
+                (mix((p >> 16) & 255, br) << 16)
+                    | (mix((p >> 8) & 255, bgg) << 8)
+                    | mix(p & 255, bb)
+            })
+            .collect();
+        self.put(c, gc, x, y, size, &composed)
+    }
+
+    fn put(
+        &self,
+        c: &RustConnection,
+        gc: Gcontext,
+        x: i16,
+        y: i16,
+        width: u16,
+        pixels: &[u32],
+    ) -> crate::Result<()> {
+        let stride = usize::from(width) * 4;
+        let max_rows = (60000 / stride.max(1)).max(1);
+        for (i, chunk) in pixels.chunks(max_rows * usize::from(width)).enumerate() {
+            let rows = (chunk.len() / usize::from(width)) as u16;
+            let bytes: Vec<u8> = chunk
+                .iter()
+                .flat_map(|p| {
+                    if self.image_byte_order == ImageOrder::MSB_FIRST {
+                        p.to_be_bytes()
+                    } else {
+                        p.to_le_bytes()
+                    }
+                })
+                .collect();
+            c.put_image(
+                ImageFormat::Z_PIXMAP,
+                self.back,
+                gc,
+                width,
+                rows,
+                x,
+                y.saturating_add((i * max_rows) as i16),
+                0,
+                self.depth,
+                &bytes,
+            )?;
+        }
+        Ok(())
     }
 
     /// Upload one glyph, blended against the background colour, to the
@@ -304,6 +398,17 @@ impl Renderer {
         Ok(())
     }
 }
+
+/// Fonts with wide symbol coverage (arrows, currency, maths) for the
+/// characters the monospaced font lacks.
+const FALLBACK_FONTS: &[&str] = &[
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+];
 
 fn split(colour: u32) -> (u32, u32, u32) {
     ((colour >> 16) & 255, (colour >> 8) & 255, colour & 255)
