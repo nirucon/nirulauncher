@@ -108,6 +108,13 @@ pub(crate) fn agent_items() -> Vec<Item> {
     }]
 }
 
+fn is_video(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".mp4", ".mkv", ".webm", ".gif", ".mov"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
 pub(crate) fn share_items() -> Vec<Item> {
     let mut items = Vec::new();
     let pending_file = std::env::var("NIRUSHARE_SEND_FILE")
@@ -117,10 +124,10 @@ pub(crate) fn share_items() -> Vec<Item> {
         .as_ref()
         .map(|p| vec!["--file".to_string(), p.clone()])
         .unwrap_or_else(|| vec!["--clipboard".to_string()]);
-    let noun = if pending_file.is_some() {
-        "image"
-    } else {
-        "clipboard"
+    let noun = match pending_file.as_deref() {
+        Some(path) if is_video(path) => "recording",
+        Some(_) => "image",
+        None => "clipboard",
     };
     items.push(Item {
         key: "share:pair:open".into(),

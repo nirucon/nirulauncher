@@ -109,7 +109,7 @@ Each view can be opened directly:
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
-| `--clip` | NIRUCLIP capture profiles, overlays, recovery and status |
+| `--clip` | NIRUCLIP capture profiles, overlays, camera check and preview, MP4/GIF export and sharing, recovery and status |
 | `--share`, `--share-pair` | NIRUSHARE devices, inbox, pairing and Discord webhooks |
 | `--health` | Installed/running, session, audio, network, display and capture status |
 | `--agent` | Short OpenCode prompt, then a centred terminal |

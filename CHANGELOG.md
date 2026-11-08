@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1 (2026-11-08)
+
+- **Capture view (`--clip`) for NIRUCLIP 0.4.0:** *Check camera*
+  (`niruclip --check-camera`: privacy key/shutter, frozen picture, camera in
+  use), *Camera preview* (a live window with the overlay shape), *Last
+  recording → MP4/GIF* and *Share last recording* (MP4 through NIRU Share).
+  A running recording with a camera problem shows a *Camera problem* row with
+  NIRUCLIP's message. The status is read once per view instead of twice.
+- NIRU Share names a pending video file a *recording* instead of an *image*.
+
 ## 0.5.0 (2026-11-08)
 
 - **Keybinding cheat sheet** (`--keys`, NIRUWM's new `Super+/`). Rows come

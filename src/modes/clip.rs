@@ -26,21 +26,33 @@ pub(crate) fn clip_profiles() -> Vec<(String, String, String, String, String)> {
         .collect()
 }
 
-pub(crate) fn clip_recoverable() -> bool {
-    let Ok(output) = providers::output("niruclip", &["--status", "--json"]) else {
-        return false;
-    };
+fn clip_status() -> Option<serde_json::Value> {
+    let output = providers::output("niruclip", &["--status", "--json"]).ok()?;
     if !output.status.success() {
-        return false;
+        return None;
     }
-    serde_json::from_slice::<serde_json::Value>(&output.stdout)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("recoverable")
-                .and_then(|recoverable| recoverable.as_bool())
-        })
-        .unwrap_or(false)
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()
+}
+
+/// A camera problem NIRUCLIP reports for the running recording (privacy
+/// image, frozen picture, no frames, camera busy), if any.
+fn camera_problem(status: &serde_json::Value) -> Option<String> {
+    let active = matches!(
+        status.get("state").and_then(|s| s.as_str()),
+        Some("countdown" | "starting" | "recording" | "pausing" | "paused")
+    );
+    let camera = status.get("camera")?;
+    let state = camera.get("status")?.as_str()?;
+    if !active || matches!(state, "ok" | "checking") {
+        return None;
+    }
+    Some(
+        camera
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or(state)
+            .to_string(),
+    )
 }
 
 pub(crate) fn clip_items() -> Vec<Item> {
@@ -154,6 +166,36 @@ pub(crate) fn clip_static_items() -> Vec<Item> {
             "Finalize the current recording",
             &["--stop"],
         ),
+        spawn(
+            "clip:check-camera",
+            "Check camera",
+            "Test the camera picture (privacy key, shutter, busy)",
+            &["--check-camera"],
+        ),
+        spawn(
+            "clip:preview",
+            "Camera preview",
+            "Live window with the overlay shape · q closes",
+            &["--preview"],
+        ),
+        spawn(
+            "clip:export-mp4",
+            "Last recording → MP4",
+            "Lossless copy next to the MKV, plays everywhere",
+            &["--export", "mp4"],
+        ),
+        spawn(
+            "clip:export-gif",
+            "Last recording → GIF",
+            "First 30 s, 12 fps, up to 720 px wide",
+            &["--export", "gif"],
+        ),
+        spawn(
+            "clip:share",
+            "Share last recording",
+            "As MP4 via NIRU Share",
+            &["--share"],
+        ),
         Item {
             key: "clip:status".into(),
             group: "Capture".into(),
@@ -188,6 +230,18 @@ pub(crate) fn clip_provider_items() -> Vec<Item> {
         },
     };
     let mut items = Vec::new();
+    let status = clip_status();
+    if let Some(problem) = status.as_ref().and_then(camera_problem) {
+        items.push(Item {
+            key: "clip:camera-warning".into(),
+            group: "Capture".into(),
+            name: "Camera problem".into(),
+            detail: problem,
+            keywords: "record camera webcam privacy warning".into(),
+            favorite: false,
+            target: Target::Info,
+        });
+    }
     for (name, description, mode, audio, webcam) in clip_profiles() {
         items.push(spawn(
             &format!("clip:profile:{name}"),
@@ -196,7 +250,11 @@ pub(crate) fn clip_provider_items() -> Vec<Item> {
             &["--profile", &name, "--countdown", "3"],
         ));
     }
-    if clip_recoverable() {
+    let recoverable = status
+        .as_ref()
+        .and_then(|value| value.get("recoverable").and_then(|r| r.as_bool()))
+        .unwrap_or(false);
+    if recoverable {
         items.push(spawn(
             "clip:recover",
             "Recover interrupted recording",
@@ -205,4 +263,26 @@ pub(crate) fn clip_provider_items() -> Vec<Item> {
         ));
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::camera_problem;
+
+    #[test]
+    fn camera_problems_are_shown_only_for_an_active_recording() {
+        let privacy = serde_json::json!({
+            "state": "recording",
+            "camera": {"device": "/dev/video0", "status": "privacy", "message": "the camera shows its privacy image"}
+        });
+        assert_eq!(
+            camera_problem(&privacy).as_deref(),
+            Some("the camera shows its privacy image")
+        );
+        let ok = serde_json::json!({"state": "recording", "camera": {"device": "/dev/video0", "status": "ok"}});
+        assert!(camera_problem(&ok).is_none());
+        let finished = serde_json::json!({"state": "finished", "camera": {"device": "/dev/video0", "status": "privacy"}});
+        assert!(camera_problem(&finished).is_none());
+        assert!(camera_problem(&serde_json::json!({"state": "recording"})).is_none());
+    }
 }

@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "nirulauncher"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "ab_glyph",
  "indexmap",
