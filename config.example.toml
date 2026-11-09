@@ -76,3 +76,21 @@ terminal = ["kitty"]
 # recent rows after the favourites when the field is empty. A better text
 # match always wins over frequent use.
 # rank_by_usage = true
+
+# File search: `--files`, "Find files" in NIRU Actions, or `/ name` in the
+# unified view. Every key is optional. Results come from plocate/locate when
+# its database covers the roots, else fd/fdfind, else a bounded built-in walk
+# (backend = "auto"); "plocate", "locate", "fd" and "builtin" choose one.
+# Recently used files (~/.local/share/recently-used.xbel) come first.
+#
+# [files]
+# enabled = true
+# roots = ["~"]
+# backend = "auto"
+# max_results = 50
+# show_hidden = false
+# `exclude` replaces this built-in list: names anywhere, or paths below a
+# root when they contain a slash; `*` and `?` match like a shell glob.
+# exclude = [".cache", ".local/share/Trash", ".git", "node_modules", "target",
+#            "__pycache__", ".venv", ".mypy_cache", ".pytest_cache", ".tox",
+#            ".gradle", ".npm", ".cargo", ".rustup"]

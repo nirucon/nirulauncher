@@ -38,6 +38,11 @@ second, competing settings implementation.
   emoji, ©, ®, ™, arrows, °, ±, currency and typographic quotes, English and
   Swedish names, recents first, skin tones, pasted where you were typing.
 - Colors view: the last colors picked with `nirushot pick` (`Super+Ctrl+C`).
+- File search (`--files`, *Find files* in NIRU Actions, or `/ name` in the
+  unified view): your home folder through `plocate`, `fd` or a bounded
+  built-in walk, recently used files first, without hidden folders, caches
+  and build output. Enter opens, Ctrl+Enter opens the folder, Shift+Enter
+  copies the path.
 - Calculator row (`2+2*3`, `15% of 240`), copied with Enter.
 - Optional OpenCode handoff through `niructl agent`, never auto-approved.
 - HiDPI scaling from `Xft.dpi`, dead-key composition and AltGr levels.
@@ -105,6 +110,7 @@ Each view can be opened directly:
 | `--keys` | Keybinding cheat sheet |
 | `--emoji` | Emoji and symbol picker |
 | `--colors` | The last picked colors, and Pick color |
+| `--files` | File search in the home folder, recent files first |
 | `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing |
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
@@ -115,8 +121,8 @@ Each view can be opened directly:
 | `--agent` | Short OpenCode prompt, then a centred terminal |
 
 Non-interactive helpers: `--list`, `--list-actions`, `--list-search`,
-`--wifi-status`, `--wifi-scan`, `--wired-status`, `--check-config` and
-`--version`.
+`--wifi-status`, `--wifi-scan`, `--wired-status`, `--list-files QUERY`,
+`--check-config` and `--version`.
 
 **Share and Discord.** With NIRUSHARE 0.4.0 or newer, the Share view lists
 every Discord webhook configured in `~/.config/nirushare/webhooks.toml` as
@@ -162,6 +168,32 @@ size; the font is only read when the first emoji row is shown.
 NIRUSHOT picked, newest first, with a swatch; Enter copies the hex value.
 *Pick color* runs `nirushot pick` (also `Super+Ctrl+C`).
 
+**File search.** `--files`, *Find files* in NIRU Actions, or `/` followed by
+a name in the unified view (`Super+Shift+P`, also `Super+P` and `Super+A`):
+`/ faktura` or `/faktura 2024`. NIRUWM has no default key for it; bind one
+with a `[[keys]]` entry that runs `nirulauncher --files` (for example
+`Super+O`, free in NIRUWM's defaults).
+
+- An empty field (or a lone `/`) lists recently used files
+  (`~/.local/share/recently-used.xbel`), newest first, marked ↺. While
+  typing, recent files that match come first, then the best matches.
+- Words match in any order, in the file name or its folders, ignoring case
+  and diacritics (`faktura aao` finds `faktura-åäö.pdf`); a word in the file
+  name ranks above one in a folder name. Rows show the kind (PDF, Image,
+  Folder, …), the name and the folder (`~/Fakturor`).
+- **Enter** opens with `xdg-open`, **Ctrl+Enter** opens the containing
+  folder, **Shift+Enter** or **Ctrl+C** copies the path.
+- Searched: the home folder, without hidden files and folders, and without
+  `.cache`, the trash, `.git`, `node_modules`, `target`, `__pycache__`,
+  `.venv` and similar (see `[files]` below).
+- Backends, in the order `auto` tries them: `plocate` (or mlocate's
+  `locate`) when its database covers the home folder, `fd`/`fdfind`, then a
+  built-in walk that lists the home folder once per open (at most 250 000
+  entries or 8 seconds) and searches that list in memory. Every search runs in
+  the background and is cancelled by the next key; it stops after 1.5 seconds
+  and shows what it found. The footer names the backend and the time. A
+  `locate` database only knows files from its last `updatedb` run.
+
 The complete behaviour of every view (actions catalogue, intent phrases,
 Wi-Fi, wired networking, web search, sound and settings) is described in
 [docs/GUIDE.md](docs/GUIDE.md).
@@ -192,10 +224,21 @@ id = "searx"
 label = "SearXNG (home)"
 url = "https://searx.example/search?q={query}"
 alias = "sx"
+
+[files]                       # file search; every key is optional
+enabled = true
+roots = ["~"]
+backend = "auto"              # auto, plocate, locate, fd, builtin
+max_results = 50
+show_hidden = false
+# exclude = [".cache", ".local/share/Trash", ".git", "node_modules", "target"]
 ```
 
 `{query}` is replaced by the percent-encoded phrase; only `http` and `https`
 addresses are opened. `enabled = false` on a built-in id turns that engine off.
+`exclude` replaces the built-in list of skipped names (a name such as
+`node_modules` or `*.o`, or a path below a root such as `.local/share/Trash`);
+the built-in list is in [config.example.toml](config.example.toml).
 Set `NIRU_UI_SCALE` (0.75–2.5) to override HiDPI detection, or `1` to disable
 it. Check a file with `nirulauncher --check-config`.
 
@@ -207,6 +250,7 @@ it. Check a file with `nirulauncher --check-config`.
 | `~/.local/state/nirulauncher/usage.tsv` | Launch history (last 500 launches) |
 | `~/.local/state/nirulauncher/emoji-recent.txt`, `emoji-tone` | Recent emoji and the chosen skin tone |
 | `~/.local/state/nirushot/colors.json` | Picked colors (written by NIRUSHOT, read here) |
+| `~/.local/share/recently-used.xbel` | Recently used files (written by GTK and other programs, read here) |
 | `~/.config/niruwm/config.toml` | Theme, font and browser fallback |
 | `~/.local/bin/nirulauncher` | Program |
 
@@ -224,6 +268,9 @@ it. Check a file with `nirulauncher --check-config`.
 - **An emoji was not pasted.** Some programs ignore synthetic keys; the emoji
   is then left on the clipboard for Ctrl+V. A clipboard history may record the
   emoji for a moment while it is pasted.
+- **File search misses a new file.** With `plocate`/`locate` the database is
+  updated by `updatedb` (usually daily); set `backend = "fd"` in `[files]` to
+  search the disk directly.
 - **A web search engine opens the wrong browser.** Set `browser` in the
   launcher config.
 
@@ -248,6 +295,7 @@ sh tests/ui-smoke.sh target/release/nirulauncher
 sh tests/theme-colors.sh target/release/nirulauncher
 sh tests/first-paint.sh target/release/nirulauncher   # 150 ms first paint, memoized providers
 sh tests/event-sounds.sh target/release/nirulauncher  # Sound view through a fake nirux
+sh tests/files.sh target/release/nirulauncher         # file search, every backend
 ```
 
 ## Status, disclaimer and how it's made

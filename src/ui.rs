@@ -83,6 +83,10 @@ pub(crate) struct Ui {
     pub(crate) capture: bool,
     /// Shift was held with the Enter that activates a row.
     pub(crate) enter_shift: bool,
+    /// Ctrl was held with that Enter (a file row opens its folder).
+    pub(crate) enter_ctrl: bool,
+    /// File search (`--files`, `/ query`): the running search and its rows.
+    pub(crate) files: crate::modes::files::State,
     /// Text to paste into the previous window once this one has closed.
     pub(crate) paste_after: Option<String>,
     pub(crate) closed: bool,
@@ -181,7 +185,7 @@ impl Ui {
         let provider_job = catalog.job;
         let mut items = catalog.items;
         mark_favorites(&mut items, &cfg);
-        if items.is_empty() && !has_job && mode != "search" && mode != "wifi" && mode != "sound" {
+        if items.is_empty() && !has_job && !matches!(mode, "search" | "wifi" | "sound" | "files") {
             return Err("no launchable applications or actions found".into());
         }
         let (px, py) = point(&c, root);
@@ -204,8 +208,10 @@ impl Ui {
         // switches to (Keybindings, Idle timing) are not shown in a five-row
         // window; the launcher never resizes while it is open.
         // A view whose rows come from providers cannot know its length yet.
-        let rows = if matches!(mode, "settings" | "wifi" | "system-actions" | "sound")
-            || (has_job && mode != "apps")
+        let rows = if matches!(
+            mode,
+            "settings" | "wifi" | "system-actions" | "sound" | "files"
+        ) || (has_job && mode != "apps")
         {
             cfg.max_rows
         } else {
@@ -374,6 +380,8 @@ impl Ui {
             emoji_font: None,
             capture: false,
             enter_shift: false,
+            enter_ctrl: false,
+            files: Default::default(),
             paste_after: None,
             closed: false,
             items,
@@ -398,6 +406,9 @@ impl Ui {
             mode: mode.to_string(),
             catalog,
         };
+        if mode == "files" {
+            crate::modes::files::prefetch(&ui.cfg.files);
+        }
         ui.refilter();
         if mode == "wifi" {
             ui.enter_wifi()?;
@@ -445,6 +456,8 @@ impl Ui {
             "Emoji and symbols"
         } else if self.mode == "colors" {
             "Colors"
+        } else if self.mode == "files" {
+            "Find files"
         } else if self.web_mode {
             "Search the web"
         } else if self.items.iter().all(|item| item.group == "Shortcuts") {
@@ -605,7 +618,9 @@ impl Ui {
                 format!("{gap}{}", item.name)
             } else if item.favorite {
                 format!("★ {}", item.label())
-            } else if self.query.trim().is_empty() && self.recent.contains(&(self.offset + line)) {
+            } else if (self.query.trim().is_empty() || self.files_query().is_some())
+                && self.recent.contains(&(self.offset + line))
+            {
                 format!("{} {}", self.recent_mark, item.label())
             } else {
                 item.label()
@@ -618,8 +633,11 @@ impl Ui {
                 .line(&self.c, self.gc, pad, baseline, &name, name_colour, bg)?;
             // Why the row is here: the matched letters are underlined, and a
             // row found only through its keywords or detail names the word.
-            if !self.query.trim().is_empty() && !self.web_mode && self.mode != "agent" {
-                let found = highlight(item, &self.query);
+            let typed = self
+                .files_query()
+                .unwrap_or_else(|| self.query.trim().to_string());
+            if !typed.is_empty() && !self.web_mode && self.mode != "agent" {
+                let found = highlight(item, &typed);
                 let shown_label = if name_only {
                     item.name.clone()
                 } else {
@@ -730,6 +748,15 @@ impl Ui {
             "Enter saves the layout · Esc cancels".to_string()
         } else if !self.error.is_empty() {
             self.error.clone()
+        } else if self.files_query().is_some() {
+            let keys = "Enter open · Ctrl+Enter folder · Shift+Enter copy path";
+            if self.files.rx.is_some() {
+                format!("Searching… · {keys}")
+            } else if self.files.note.is_empty() {
+                format!("{keys} · Esc close")
+            } else {
+                format!("{} · {keys}", self.files.note)
+            }
         } else if let Some(secret) = &self.wifi_secret {
             if secret.hidden && secret.stage == 0 {
                 "Type the hidden SSID · Enter continues · Esc cancels".to_string()
@@ -1170,6 +1197,15 @@ impl Ui {
             return;
         }
         self.items.truncate(self.plain_items);
+        if let Some(query) = self.files_query() {
+            self.files.request(&self.cfg.files, &query);
+            self.show_file_rows();
+            return;
+        }
+        if self.files.sent.is_some() {
+            // The `/` was deleted: back to the view's own rows.
+            self.files.reset();
+        }
         let intent_rows = if matches!(self.mode.as_str(), "apps" | "actions" | "system-actions")
             && !self.query.trim().is_empty()
         {
@@ -1217,6 +1253,46 @@ impl Ui {
         self.offset = 0;
     }
 
+    /// The file search query: the whole field in the file view, the text
+    /// after `/` in the unified views. `None` when file search is off.
+    pub(crate) fn files_query(&self) -> Option<String> {
+        if !self.cfg.files.enabled && self.mode != "files" {
+            return None;
+        }
+        if self.mode == "files" {
+            return Some(self.query.trim().to_string());
+        }
+        if matches!(self.mode.as_str(), "apps" | "actions" | "system-actions") {
+            return crate::modes::files::prefixed(&self.query).map(str::to_string);
+        }
+        None
+    }
+
+    /// Show the file rows of the last finished search after the view's own
+    /// rows (which the file search hides).
+    pub(crate) fn show_file_rows(&mut self) {
+        self.items.truncate(self.plain_items);
+        let first = self.items.len();
+        self.items.extend(self.files.rows.iter().cloned());
+        self.filtered = (first..self.items.len()).collect();
+        self.recent = 0..self.files.recent.min(self.filtered.len());
+        self.selected = 0;
+        self.offset = 0;
+    }
+
+    /// A file search finished: show its rows, and act on Enter pressed while
+    /// it was running.
+    pub(crate) fn poll_files(&mut self) -> Result<bool> {
+        if !self.files.poll() {
+            return Ok(false);
+        }
+        if self.files_query().is_some() {
+            self.show_file_rows();
+            self.draw()?;
+        }
+        Ok(true)
+    }
+
     pub(crate) fn move_selection(&mut self, delta: i32) {
         if self.filtered.is_empty() {
             return;
@@ -1253,8 +1329,9 @@ impl Ui {
             && self.catalog_rx.is_none()
             && !matches!(
                 self.mode.as_str(),
-                "agent" | "share-pair" | "wifi" | "wired" | "keys" | "emoji" | "colors"
+                "agent" | "share-pair" | "wifi" | "wired" | "keys" | "emoji" | "colors" | "files"
             )
+            && self.files_query().is_none()
     }
 
     /// Tab with no matches: keep the text and show the web-search engines in
@@ -1366,7 +1443,7 @@ impl Ui {
         // The rows a settings sub-view shows are built in-process so choosing
         // one swaps the open launcher instead of racing a second one.
         let catalog = view_catalog(mode, &self.cfg, &self.c, self.root);
-        if catalog.items.is_empty() && catalog.job.is_none() {
+        if catalog.items.is_empty() && catalog.job.is_none() && mode != "files" {
             self.error = "Nothing to show in this view".into();
             self.draw()?;
             return Ok(());
@@ -1389,6 +1466,11 @@ impl Ui {
         self.selected = 0;
         self.offset = 0;
         self.error.clear();
+        self.files.reset();
+        if mode == "files" {
+            crate::modes::files::prefetch(&self.cfg.files);
+            self.refilter();
+        }
         self.draw()
     }
 
@@ -1414,6 +1496,26 @@ impl Ui {
             if let Some(keep) = self.events_execute(key)? {
                 return Ok(keep);
             }
+        }
+        if let Some(path) = key.strip_prefix(crate::modes::files::KEY_PREFIX) {
+            let result = if self.enter_shift {
+                copy_to_clipboard(path)
+            } else {
+                let target = if self.enter_ctrl {
+                    crate::modes::files::parent_of(path)
+                } else {
+                    path.to_string()
+                };
+                spawn_command(&["xdg-open".to_string(), target], None, false, &self.cfg)
+            };
+            return match result {
+                Ok(()) => Ok(false),
+                Err(e) => {
+                    self.error = e;
+                    self.draw()?;
+                    Ok(true)
+                }
+            };
         }
         if key.starts_with(emoji::KEY_PREFIX) {
             let Some(text) = emoji::with_tone(key, self.tone) else {
@@ -1675,8 +1777,26 @@ impl Ui {
             if self.events_rx.is_some() && self.poll_events()? {
                 continue;
             }
+            if self.files.rx.is_some() && self.poll_files()? {
+                if self.files.rx.is_none()
+                    && self.catalog_rx.is_none()
+                    && std::mem::take(&mut self.enter_after_load)
+                    && !self.activate()?
+                {
+                    self.close()?;
+                    return Ok(());
+                }
+                continue;
+            }
+            if self.files.partial && self.files.rx.is_none() && !crate::modes::files::walk_running()
+            {
+                // The walker has listed everything: search the whole list.
+                self.files.again(&self.cfg.files);
+                continue;
+            }
             if self.catalog_rx.is_some() && self.poll_catalog()? {
                 if self.catalog_rx.is_none()
+                    && self.files.rx.is_none()
                     && std::mem::take(&mut self.enter_after_load)
                     && !self.activate()?
                 {
@@ -1694,6 +1814,8 @@ impl Ui {
                         || self.sound_test_rx.is_some()
                         || self.catalog_rx.is_some()
                         || self.events_rx.is_some()
+                        || self.files.rx.is_some()
+                        || self.files.partial
                     {
                         std::thread::sleep(std::time::Duration::from_millis(40));
                         continue;
@@ -1769,6 +1891,27 @@ impl Ui {
                         self.draw()?;
                         continue;
                     }
+                    if e.state.contains(KeyButMask::CONTROL)
+                        && matches!(key, 0x70 | 0x73)
+                        && self.files_query().is_some()
+                    {
+                        self.error = "File rows cannot be pinned or saved".into();
+                        self.draw()?;
+                        continue;
+                    }
+                    if e.state.contains(KeyButMask::CONTROL)
+                        && key == 0x63
+                        && self.files_query().is_some()
+                    {
+                        // Ctrl+C copies the selected file's path, like Shift+Enter.
+                        self.enter_shift = true;
+                        self.enter_ctrl = false;
+                        if !self.activate()? {
+                            self.close()?;
+                            return Ok(());
+                        }
+                        continue;
+                    }
                     if e.state.contains(KeyButMask::CONTROL) && key == 0x70 {
                         self.toggle_favorite()?;
                         continue;
@@ -1791,13 +1934,16 @@ impl Ui {
                         }
                         0xff0d | 0xff8d => {
                             self.enter_shift = shift;
+                            self.enter_ctrl = e.state.contains(KeyButMask::CONTROL);
                             // Enter before the provider rows arrived acts on
-                            // the best match once they are there.
-                            let waiting = self.catalog_rx.is_some()
+                            // the best match once they are there; in file
+                            // search, on the rows of the query as typed.
+                            let waiting = (self.catalog_rx.is_some()
                                 && self
                                     .filtered
                                     .get(self.selected)
-                                    .map_or(true, |&index| is_pending(&self.items[index]));
+                                    .map_or(true, |&index| is_pending(&self.items[index])))
+                                || (self.files.rx.is_some() && self.files_query().is_some());
                             if waiting {
                                 self.enter_after_load = true;
                             } else if !self.activate()? {
@@ -1980,8 +2126,9 @@ pub(crate) fn mode_hint(mode: &str, web: bool) -> Option<&'static str> {
         return Some("type a phrase or an address");
     }
     Some(match mode {
-        "apps" => "type an app, a keyword or 2+2",
-        "actions" => "type an action, window, app or 2+2",
+        "apps" => "type an app, a keyword, 2+2 or / for files",
+        "actions" => "type an action, window, app, 2+2 or / for files",
+        "files" => "type a file or folder name · recent files first",
         "system-actions" => "type an action or 2+2",
         "windows" => "type a window title",
         "sound" => "type to filter devices and event sounds",

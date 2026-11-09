@@ -125,6 +125,14 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
+        "--list-files" => match Config::load() {
+            Ok(cfg) => {
+                let query = args[1..].join(" ");
+                modes::files::print_search(&cfg.files, &query);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        },
         "--wired-status" => {
             let snapshot = wifi::wired_snapshot();
             serde_json::to_string_pretty(&snapshot)
@@ -136,7 +144,7 @@ fn main() {
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
         | "--wired" | "--sound" | "--clip" | "--health" | "--agent" | "--share"
-        | "--share-pair" | "--emoji" | "--colors" => {
+        | "--share-pair" | "--emoji" | "--colors" | "--files" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -163,6 +171,7 @@ fn main() {
                 "--health" => "health",
                 "--emoji" => "emoji",
                 "--colors" => "colors",
+                "--files" => "files",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -172,13 +181,13 @@ fn main() {
         }
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--version]"
+                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
             );
             std::process::exit(2);
         }

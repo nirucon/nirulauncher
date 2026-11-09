@@ -28,7 +28,100 @@ pub struct Config {
     pub search_default: Option<String>,
     /// `(alias, source id)` pairs; these override built-in aliases.
     pub search_aliases: Vec<(String, String)>,
+    /// `[files]`: file search (`--files`, `/ query`).
+    pub files: FilesConfig,
     pub palette: Palette,
+}
+
+/// `[files]`. Every key is optional; absent keys keep these defaults.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilesConfig {
+    pub enabled: bool,
+    /// Folders to search; `~` is the home directory.
+    pub roots: Vec<String>,
+    /// Names (`node_modules`, `*.o`) or paths below a root
+    /// (`.local/share/Trash`) that are never searched or shown.
+    pub exclude: Vec<String>,
+    /// `auto`, `plocate`, `locate`, `fd` (or `fdfind`) or `builtin`.
+    pub backend: String,
+    pub max_results: usize,
+    /// Also search hidden files and folders (names starting with `.`).
+    pub show_hidden: bool,
+}
+
+/// What file search skips unless `exclude` says otherwise.
+pub const DEFAULT_FILE_EXCLUDES: &[&str] = &[
+    ".cache",
+    ".local/share/Trash",
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".gradle",
+    ".npm",
+    ".cargo",
+    ".rustup",
+];
+
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            roots: vec!["~".into()],
+            exclude: DEFAULT_FILE_EXCLUDES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            backend: "auto".into(),
+            max_results: 50,
+            show_hidden: false,
+        }
+    }
+}
+
+/// Read `[files]`; a wrong type for a key keeps that key's default.
+fn files_from(v: &toml::Value) -> FilesConfig {
+    let mut files = FilesConfig::default();
+    let Some(table) = v.get("files") else {
+        return files;
+    };
+    if let Some(enabled) = table.get("enabled").and_then(|x| x.as_bool()) {
+        files.enabled = enabled;
+    }
+    if let Some(roots) = array(table, "roots") {
+        let roots: Vec<String> = roots
+            .into_iter()
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .collect();
+        if !roots.is_empty() {
+            files.roots = roots;
+        }
+    }
+    if let Some(exclude) = array(table, "exclude") {
+        files.exclude = exclude
+            .into_iter()
+            .map(|e| e.trim().trim_matches('/').to_string())
+            .filter(|e| !e.is_empty())
+            .collect();
+    }
+    if let Some(backend) = table.get("backend").and_then(|x| x.as_str()) {
+        let backend = backend.trim().to_lowercase();
+        if !backend.is_empty() {
+            files.backend = backend;
+        }
+    }
+    if let Some(n) = table.get("max_results").and_then(|x| x.as_integer()) {
+        files.max_results = n.clamp(1, 500) as usize;
+    }
+    if let Some(hidden) = table.get("show_hidden").and_then(|x| x.as_bool()) {
+        files.show_hidden = hidden;
+    }
+    files
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +174,7 @@ impl Default for Config {
             search_order: Vec::new(),
             search_default: None,
             search_aliases: Vec::new(),
+            files: FilesConfig::default(),
             palette: Palette::default(),
         }
     }
@@ -495,6 +589,7 @@ impl Config {
         cfg.search_order = order;
         cfg.search_default = default;
         cfg.search_aliases = aliases;
+        cfg.files = files_from(v);
         cfg.palette = suite_palette_from(&config_home());
         if let Some(appearance) = appearance_value(&config_home()) {
             if v.get("font_size").is_none() {
@@ -562,6 +657,15 @@ impl Config {
                 self.search_order.join(", ")
             }
         ) + &format!("\nrank by usage: {}", self.rank_by_usage)
+            + &format!(
+                "\nfiles: {} · roots {} · backend {} · max {} · hidden {}\nfiles exclude: {}",
+                if self.files.enabled { "on" } else { "off" },
+                self.files.roots.join(", "),
+                self.files.backend,
+                self.files.max_results,
+                self.files.show_hidden,
+                self.files.exclude.join(", ")
+            )
     }
 }
 
@@ -577,6 +681,42 @@ mod tests {
         assert_eq!(scale_from(Some("99"), None), 2.5);
         assert_eq!(scale_from(Some("0.1"), None), 0.75);
         assert_eq!(scale_from(Some("nonsense"), None), 1.0);
+    }
+
+    #[test]
+    fn files_section_is_optional_and_partial() {
+        let empty: toml::Value = "".parse().unwrap();
+        assert_eq!(
+            Config::from_value(&empty).unwrap().files,
+            FilesConfig::default()
+        );
+        let d = FilesConfig::default();
+        assert!(d.enabled && !d.show_hidden);
+        assert_eq!(d.roots, ["~"]);
+        assert_eq!(d.backend, "auto");
+        assert_eq!(d.max_results, 50);
+        assert!(d.exclude.iter().any(|e| e == "node_modules"));
+        let v: toml::Value = "[files]\nmax_results = 9999\nbackend = \" FD \"\n"
+            .parse()
+            .unwrap();
+        let f = Config::from_value(&v).unwrap().files;
+        assert_eq!(f.max_results, 500);
+        assert_eq!(f.backend, "fd");
+        assert_eq!(f.roots, d.roots);
+        assert_eq!(f.exclude, d.exclude);
+        let v: toml::Value =
+            "[files]\nenabled = false\nroots = [\"~/Documents\", \"\"]\nexclude = [\"/Games/\"]\nshow_hidden = true\n"
+                .parse()
+                .unwrap();
+        let f = Config::from_value(&v).unwrap().files;
+        assert!(!f.enabled && f.show_hidden);
+        assert_eq!(f.roots, ["~/Documents"]);
+        assert_eq!(f.exclude, ["Games"]);
+        // A wrong type keeps the default instead of failing the launcher.
+        let v: toml::Value = "[files]\nroots = \"~\"\nmax_results = \"x\"\n"
+            .parse()
+            .unwrap();
+        assert_eq!(Config::from_value(&v).unwrap().files, d);
     }
 
     #[test]

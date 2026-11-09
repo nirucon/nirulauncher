@@ -265,6 +265,42 @@ the old clipboard again. The launcher process stays in the background, with no
 window, until another program takes the clipboard. `:name` in the apps and
 actions views adds the best eight matches as the first rows.
 
+**File search** (`--files`, *Find files* in NIRU Actions, `/ name` in the
+applications and actions views). The text after `/` is the query; deleting
+the `/` gives the view its own rows back, and a lone `/` lists recent files.
+`/` was free: intent phrases, web aliases (`gh …`, web view only), `:emoji`
+and the calculator never start with it.
+
+The roots (`[files] roots`, the home folder by default) are searched by the
+first available backend: `plocate`, or mlocate's `locate` (GNU findutils'
+`locate` has another regex dialect and is skipped), when a test query shows
+that its database knows paths below every root; then `fd` or `fdfind`; then
+the built-in walker. Each word becomes one pattern that also matches its
+accented letters (`a` matches `å`, `ä`, `à`, …); locate requires every
+pattern, fd 8.6 and newer gets the extra words with `--and`, and the launcher
+checks every word again itself. fd runs with `--no-ignore --one-file-system`
+and the excludes; the walker does not follow symlinks or leave the root's
+file system, and lists breadth first, once per open, at most 250 000 entries
+in 8 seconds; queries then search that list in memory. Paths from every
+backend are filtered the same way: no hidden component (unless
+`show_hidden`), nothing excluded, nothing that no longer exists.
+
+Ranking: recent files that match come first. Then the sum per word: the
+whole name or name without extension, a name prefix, a word start in the
+name, anywhere in the name, then anywhere in the folder path; a match on the
+exact text ranks before one that needed diacritic folding. Ties go to the
+shallower, shorter path. A search waits 60 ms for more typing, is cancelled
+by the next key, and stops after 1.5 seconds (with at most 20 000 locate or
+5 000 fd candidates), so the window never waits for the disk. The footer
+says how many files, which backend, how long, and *limited* when a bound was
+reached. `nirulauncher --list-files WORDS` prints the same rows (kind, tab,
+path) for scripts.
+
+Enter runs `xdg-open PATH`, Ctrl+Enter `xdg-open FOLDER`, Shift+Enter and
+Ctrl+C copy the path with `xclip`. File rows cannot be pinned or saved as
+actions. `[files] enabled = false` hides *Find files* and turns the `/`
+prefix back into ordinary text.
+
 Current limits: no input-method framework, English `Name` keys, and Latin-1
 text plus the dead-key compositions above (no locale Compose file). Shift,
 Caps Lock and AltGr are handled, including Swedish letters.

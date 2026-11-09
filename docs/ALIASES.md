@@ -31,3 +31,7 @@ The implemented table is authoritative in `src/intent.rs`.
 A query that starts with `:` (`:heart`, `:tummen`) adds the best eight emoji
 and symbols as the first rows; Enter pastes the selected one (see the emoji
 picker in [GUIDE.md](GUIDE.md)).
+
+A query that starts with `/` (`/ faktura`, `/kvitto 2024`) searches files in
+the home folder instead; Enter opens the selected file (see file search in
+[GUIDE.md](GUIDE.md)).

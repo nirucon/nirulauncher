@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 (2026-11-09)
+
+- **File search** (`--files`, *Find files* in NIRU Actions, or `/ name` in
+  the unified view): the home folder without hidden folders, caches, the
+  trash and build output (`.git`, `node_modules`, `target`, `__pycache__`,
+  `.venv`, …), with recently used files (`recently-used.xbel`) first and
+  listed when the field is empty. Multi-word, case- and diacritic-insensitive
+  (`faktura aao` finds `faktura-åäö.pdf`); a word in the name ranks above one
+  in a folder. Rows show the kind, the name and the folder (`~/Fakturor`).
+  Enter opens with `xdg-open`, Ctrl+Enter opens the folder, Shift+Enter or
+  Ctrl+C copies the path.
+- Backends: `plocate` or mlocate when the database covers the roots, else
+  `fd`/`fdfind`, else a built-in walker that lists the roots once per open
+  (bounded to 250 000 entries and 8 s). Searches run in a worker, are
+  cancelled by the next key and stop after 1.5 s; the footer names the
+  backend and the time.
+- New optional `[files]` section: `enabled`, `roots`, `exclude`, `backend`,
+  `max_results`, `show_hidden`. Existing configurations need no change.
+- `--list-files WORDS` prints what the search finds.
+- New test `tests/files.sh` (every backend, recent files, Enter, Ctrl+Enter,
+  Shift+Enter, the `/` prefix) in CI and the release workflow.
+- install.sh installs this release by default.
+
 ## 0.5.1 (2026-11-08)
 
 - **Capture view (`--clip`) for NIRUCLIP 0.4.0:** *Check camera*

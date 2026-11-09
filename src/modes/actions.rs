@@ -951,6 +951,18 @@ pub(crate) fn sound_action_items() -> Vec<Item> {
 pub(crate) fn action_items(cfg: &Config) -> Vec<Item> {
     let mut items = action_command_rows();
     items.extend(picker_rows());
+    if cfg.files.enabled {
+        items.push(Item {
+            key: "action:files".into(),
+            group: "NIRU Actions".into(),
+            name: "Find files".into(),
+            detail: "Search your home folder · / name in this view".into(),
+            keywords: "file files search find open document folder locate fil filer sök hitta"
+                .into(),
+            favorite: false,
+            target: Target::Mode("files".into()),
+        });
+    }
     items.extend(clip_items());
     items.extend(sound_action_items());
     items.extend(theme_items());
