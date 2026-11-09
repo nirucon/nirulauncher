@@ -47,6 +47,10 @@ pub struct FilesConfig {
     pub max_results: usize,
     /// Also search hidden files and folders (names starting with `.`).
     pub show_hidden: bool,
+    /// A `plocate`/`locate` database to search instead of the system one
+    /// (`-d`), for example one built by the user with `updatedb -o`.
+    /// `~` is the home directory. `None` uses the program's default.
+    pub locate_db: Option<String>,
 }
 
 /// What file search skips unless `exclude` says otherwise.
@@ -79,6 +83,7 @@ impl Default for FilesConfig {
             backend: "auto".into(),
             max_results: 50,
             show_hidden: false,
+            locate_db: None,
         }
     }
 }
@@ -120,6 +125,12 @@ fn files_from(v: &toml::Value) -> FilesConfig {
     }
     if let Some(hidden) = table.get("show_hidden").and_then(|x| x.as_bool()) {
         files.show_hidden = hidden;
+    }
+    if let Some(db) = table.get("locate_db").and_then(|x| x.as_str()) {
+        let db = db.trim();
+        if !db.is_empty() {
+            files.locate_db = Some(db.to_string());
+        }
     }
     files
 }
@@ -658,13 +669,18 @@ impl Config {
             }
         ) + &format!("\nrank by usage: {}", self.rank_by_usage)
             + &format!(
-                "\nfiles: {} · roots {} · backend {} · max {} · hidden {}\nfiles exclude: {}",
+                "\nfiles: {} · roots {} · backend {} · max {} · hidden {}\nfiles exclude: {}{}",
                 if self.files.enabled { "on" } else { "off" },
                 self.files.roots.join(", "),
                 self.files.backend,
                 self.files.max_results,
                 self.files.show_hidden,
-                self.files.exclude.join(", ")
+                self.files.exclude.join(", "),
+                self.files
+                    .locate_db
+                    .as_deref()
+                    .map(|db| format!("\nfiles locate_db: {db}"))
+                    .unwrap_or_default()
             )
     }
 }
@@ -712,6 +728,14 @@ mod tests {
         assert!(!f.enabled && f.show_hidden);
         assert_eq!(f.roots, ["~/Documents"]);
         assert_eq!(f.exclude, ["Games"]);
+        assert_eq!(d.locate_db, None);
+        let v: toml::Value = "[files]\nlocate_db = \" ~/.cache/files.db \"\n"
+            .parse()
+            .unwrap();
+        let f = Config::from_value(&v).unwrap().files;
+        assert_eq!(f.locate_db.as_deref(), Some("~/.cache/files.db"));
+        let v: toml::Value = "[files]\nlocate_db = \"\"\n".parse().unwrap();
+        assert_eq!(Config::from_value(&v).unwrap().files.locate_db, None);
         // A wrong type keeps the default instead of failing the launcher.
         let v: toml::Value = "[files]\nroots = \"~\"\nmax_results = \"x\"\n"
             .parse()

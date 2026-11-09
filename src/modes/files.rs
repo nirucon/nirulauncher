@@ -43,6 +43,8 @@ pub(crate) enum Backend {
     Locate {
         program: String,
         all: bool,
+        /// `-d DB` from `[files] locate_db`, already escaped for locate.
+        db: Option<String>,
     },
     /// `fd` or `fdfind`; `and` when it has `--and` (fd 8.6 or newer) to
     /// require every word.
@@ -458,21 +460,77 @@ fn read_paths(
     Ok(complete)
 }
 
+/// `[files] locate_db` as an absolute path (`~` is the home directory).
+pub(crate) fn locate_db_path(cfg: &FilesConfig) -> Option<PathBuf> {
+    let db = cfg.locate_db.as_deref()?;
+    if db == "~" {
+        return home();
+    }
+    if let Some(rest) = db.strip_prefix("~/") {
+        return home().map(|h| h.join(rest));
+    }
+    let path = PathBuf::from(db);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        home().map(|h| h.join(path))
+    }
+}
+
+/// `-d` takes a `:`-separated list where `\` escapes; one path is escaped so
+/// that a `:` in it is not a separator.
+pub(crate) fn locate_db_arg(path: &Path) -> String {
+    let mut out = String::new();
+    for ch in path.to_string_lossy().chars() {
+        if ch == ':' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The leading `program [-d DB]` of a locate command line.
+fn locate_argv(program: &str, db: Option<&str>) -> Vec<String> {
+    let mut argv = vec![program.to_string()];
+    if let Some(db) = db {
+        argv.push("-d".into());
+        argv.push(db.to_string());
+    }
+    argv
+}
+
+/// A plain locate pattern that contains `*`, `?`, `[` or `\` is a glob
+/// matched against the whole path, not a substring.
+fn has_glob(text: &str) -> bool {
+    text.contains(['*', '?', '[', '\\'])
+}
+
+/// The coverage question for one root: a substring when that is literal,
+/// else an anchored regex (slower, but a root such as `~/Musik [2024]`
+/// would otherwise never be found).
+pub(crate) fn coverage_args(prefix: &str) -> Vec<String> {
+    if has_glob(prefix) {
+        vec![
+            "--regex".into(),
+            "--".into(),
+            format!("^{}", escape(prefix)),
+        ]
+    } else {
+        vec!["--".into(), prefix.to_string()]
+    }
+}
+
 /// Whether `program`'s database covers every root: it knows a path below
 /// each. Asked once per root and process, with a short time limit.
-fn locate_covers(program: &str, roots: &[PathBuf]) -> bool {
+fn locate_covers(program: &str, db: Option<&str>, roots: &[PathBuf]) -> bool {
     let never = AtomicBool::new(false);
     roots.iter().all(|root| {
         let prefix = format!("{}/", root.to_string_lossy().trim_end_matches('/'));
         let mut found = false;
-        let argv = vec![
-            program.to_string(),
-            "-0".into(),
-            "-l".into(),
-            "1".into(),
-            "--".into(),
-            prefix.clone(),
-        ];
+        let mut argv = locate_argv(program, db);
+        argv.extend(["-0".into(), "-l".into(), "1".into()]);
+        argv.extend(coverage_args(&prefix));
         let deadline = Instant::now() + Duration::from_millis(800);
         let _ = read_paths(&argv, &never, deadline, |path| {
             found |= path.starts_with(&prefix);
@@ -485,18 +543,34 @@ fn locate_covers(program: &str, roots: &[PathBuf]) -> bool {
 /// The backend `cfg.backend` asks for, or the first available one for
 /// `auto` (and when the asked-for one is missing, with a note why).
 pub(crate) fn resolve(cfg: &FilesConfig, roots: &[PathBuf]) -> (Backend, Option<String>) {
+    // A configured database that is missing is a reason to say so, and the
+    // system database is not searched in its place.
+    let db_path = locate_db_path(cfg);
+    let db_missing = db_path.as_ref().is_some_and(|p| !p.is_file());
+    let db = db_path.as_deref().map(locate_db_arg);
     let locate = |program: &str| {
-        if !in_path(program) {
+        if !in_path(program) || db_missing {
             return None;
         }
         // GNU findutils' locate has another regex dialect; it is not used.
         let version = version_line(program);
         let all = version.starts_with("mlocate");
         let known = version.starts_with("plocate") || all;
-        (known && locate_covers(program, roots)).then(|| Backend::Locate {
+        (known && locate_covers(program, db.as_deref(), roots)).then(|| Backend::Locate {
             program: program.into(),
             all,
+            db: db.clone(),
         })
+    };
+    let missing_note = |what: &str| {
+        if db_missing {
+            format!(
+                "locate_db {} not found, using auto",
+                db_path.as_deref().unwrap_or(Path::new("")).display()
+            )
+        } else {
+            format!("{what} is not available, using auto")
+        }
     };
     let fd = |program: &str| {
         in_path(program).then(|| Backend::Fd {
@@ -512,7 +586,7 @@ pub(crate) fn resolve(cfg: &FilesConfig, roots: &[PathBuf]) -> (Backend, Option<
             .unwrap_or(Backend::Builtin)
     };
     let wanted = match cfg.backend.as_str() {
-        "auto" | "" => return (auto(), None),
+        "auto" | "" => return (auto(), db_missing.then(|| missing_note("locate"))),
         "builtin" | "built-in" | "walk" => return (Backend::Builtin, None),
         "plocate" | "locate" => locate(&cfg.backend),
         "fd" | "fdfind" => fd(&cfg.backend)
@@ -527,10 +601,7 @@ pub(crate) fn resolve(cfg: &FilesConfig, roots: &[PathBuf]) -> (Backend, Option<
     };
     match wanted {
         Some(backend) => (backend, None),
-        None => (
-            auto(),
-            Some(format!("{} is not available, using auto", cfg.backend)),
-        ),
+        None => (auto(), Some(missing_note(&cfg.backend))),
     }
 }
 
@@ -590,14 +661,14 @@ fn backend_paths(
     let words = terms.by_length();
     let regexes: Vec<String> = words.iter().map(|w| path_regex(roots, w)).collect();
     let (argv, cap) = match backend {
-        Backend::Locate { program, all } => {
-            let mut argv = vec![
-                program.clone(),
+        Backend::Locate { program, all, db } => {
+            let mut argv = locate_argv(program, db.as_deref());
+            argv.extend([
                 "-0".into(),
                 "-i".into(),
                 "-l".into(),
                 LOCATE_CANDIDATES.to_string(),
-            ];
+            ]);
             if *all {
                 argv.push("-A".into());
             }
@@ -1188,6 +1259,40 @@ mod tests {
 
     fn cfg() -> FilesConfig {
         FilesConfig::default()
+    }
+
+    #[test]
+    fn locate_database_arguments_are_escaped_and_globs_avoided() {
+        assert_eq!(locate_db_arg(Path::new("/a/b.db")), "/a/b.db");
+        assert_eq!(locate_db_arg(Path::new("/a:b\\c.db")), "/a\\:b\\\\c.db");
+        assert_eq!(
+            locate_argv("plocate", Some("/x.db")),
+            ["plocate", "-d", "/x.db"]
+        );
+        assert_eq!(locate_argv("plocate", None), ["plocate"]);
+        // A literal root is a fast substring question.
+        assert_eq!(coverage_args("/home/n/"), ["--", "/home/n/"]);
+        // A root with glob characters would be a whole-path glob; it is
+        // asked as an anchored regex instead.
+        assert_eq!(
+            coverage_args("/home/n/Musik [2024]/"),
+            ["--regex", "--", "^/home/n/Musik \\[2024\\]/"]
+        );
+        assert_eq!(coverage_args("/home/n/a*b/")[0], "--regex");
+    }
+
+    #[test]
+    fn locate_db_paths_resolve_like_roots() {
+        let home = std::env::var("HOME").unwrap();
+        let mut c = cfg();
+        assert_eq!(locate_db_path(&c), None);
+        c.locate_db = Some("~/.cache/files.db".into());
+        assert_eq!(
+            locate_db_path(&c),
+            Some(PathBuf::from(&home).join(".cache/files.db"))
+        );
+        c.locate_db = Some("/var/tmp/x.db".into());
+        assert_eq!(locate_db_path(&c), Some(PathBuf::from("/var/tmp/x.db")));
     }
 
     #[test]

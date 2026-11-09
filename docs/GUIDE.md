@@ -67,7 +67,10 @@ If NetworkManager is absent, the view is read-only and explains that NIRUX will
 not replace another network manager or guess DHCP/routes.
 
 The Quick Settings entry **Wired network** is shown when an Ethernet interface
-exists. A successful launcher-initiated Wi-Fi or wired connection sends a normal
+exists. **Window swallowing: on/off** (Quick Settings, and *System* in NIRU
+Actions) shows NIRUWM's session switch, read from the root property
+`_NIRUWM_SWALLOW`, and Enter runs `niructl swallow toggle`. With a NIRUWM older
+than 0.19 the row reads *unavailable* and does nothing. A successful launcher-initiated Wi-Fi or wired connection sends a normal
 NIRUNOTIFY notification with the network/interface, security/state and address;
 passwords are never included.
 
@@ -79,7 +82,8 @@ phrase is only matched after case, whitespace and punctuation normalization; it
 never becomes a shell command and the typed text is never inserted into argv.
 Supported English phrases include lock, logout, reboot, shutdown, focus mode,
 presentation mode, stop context, DND, keep awake, volume and microphone mute,
-brightness, night light, compositor, off-screen window rescue and Wi-Fi radio
+brightness, night light, compositor, window swallowing, off-screen window
+rescue and Wi-Fi radio
 on/off through NetworkManager (`nmcli`). Additional language aliases are listed
 in [Intent aliases](docs/ALIASES.md). Missing `nmcli` shows an unavailable info
 row instead of claiming success; all other actions use the same fixed argv as
@@ -285,6 +289,14 @@ in 8 seconds; queries then search that list in memory. Paths from every
 backend are filtered the same way: no hidden component (unless
 `show_hidden`), nothing excluded, nothing that no longer exists.
 
+`[files] locate_db = "~/.cache/files.db"` makes `plocate`/`locate` search
+that database (`-d`) instead of the system one, for example one you build
+yourself without root: `updatedb.plocate -o ~/.cache/files.db -U ~ -l no`.
+A configured database that does not exist is reported in the footer and the
+next backend is used; the system database is not searched in its place. A
+root whose path contains `[`, `*` or `?` is checked with an anchored regex,
+since locate treats such a plain pattern as a whole-path glob.
+
 Ranking: recent files that match come first. Then the sum per word: the
 whole name or name without extension, a name prefix, a word start in the
 name, anywhere in the name, then anywhere in the folder path; a match on the
@@ -298,8 +310,9 @@ path) for scripts.
 
 Enter runs `xdg-open PATH`, Ctrl+Enter `xdg-open FOLDER`, Shift+Enter and
 Ctrl+C copy the path with `xclip`. File rows cannot be pinned or saved as
-actions. `[files] enabled = false` hides *Find files* and turns the `/`
-prefix back into ordinary text.
+actions. `[files] enabled = false` hides *Find files*, drops "/ for files"
+from the empty-field hints, and turns the `/` prefix back into ordinary
+text.
 
 Current limits: no input-method framework, English `Name` keys, and Latin-1
 text plus the dead-key compositions above (no locale Compose file). Shift,

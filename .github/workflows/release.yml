@@ -15,7 +15,7 @@ jobs:
       - name: Install musl toolchain and X11 test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools xvfb xauth xdotool x11-apps x11-utils imagemagick xclip
+          sudo apt-get install -y musl-tools xvfb xauth xdotool x11-apps x11-utils imagemagick xclip plocate
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       # The environment tests share HOME and PATH; one thread is deterministic.

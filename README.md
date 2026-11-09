@@ -43,6 +43,8 @@ second, competing settings implementation.
   built-in walk, recently used files first, without hidden folders, caches
   and build output. Enter opens, Ctrl+Enter opens the folder, Shift+Enter
   copies the path.
+- Quick Settings and NIRU Actions show the current state of NIRUWM's window
+  swallowing and toggle it (`niructl swallow toggle`).
 - Calculator row (`2+2*3`, `15% of 240`), copied with Enter.
 - Optional OpenCode handoff through `niructl agent`, never auto-approved.
 - HiDPI scaling from `Xft.dpi`, dead-key composition and AltGr levels.
@@ -231,6 +233,7 @@ roots = ["~"]
 backend = "auto"              # auto, plocate, locate, fd, builtin
 max_results = 50
 show_hidden = false
+# locate_db = "~/.cache/files.db"  # plocate/locate -d: a database you built
 # exclude = [".cache", ".local/share/Trash", ".git", "node_modules", "target"]
 ```
 
@@ -271,6 +274,10 @@ it. Check a file with `nirulauncher --check-config`.
 - **File search misses a new file.** With `plocate`/`locate` the database is
   updated by `updatedb` (usually daily); set `backend = "fd"` in `[files]` to
   search the disk directly.
+- **plocate is installed but not used.** It is only used when its database
+  knows the roots. Without root you can build your own and point at it:
+  `updatedb.plocate -o ~/.cache/files.db -U ~ -l no`, then
+  `locate_db = "~/.cache/files.db"` in `[files]`.
 - **A web search engine opens the wrong browser.** Set `browser` in the
   launcher config.
 

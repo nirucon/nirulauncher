@@ -14,7 +14,7 @@ jobs:
       - run: cargo test --locked -- --test-threads=1
       - name: Native X11 smoke test
         run: |
-          sudo apt-get update && sudo apt-get install -y xvfb xauth xdotool x11-apps x11-utils imagemagick xclip
+          sudo apt-get update && sudo apt-get install -y xvfb xauth xdotool x11-apps x11-utils imagemagick xclip plocate
           xvfb-run -a cargo test --locked focus_waits_for_window_manager_mapping -- --ignored --test-threads=1
           xvfb-run -a cargo test --locked --test lock_handoff -- --ignored --test-threads=1
           cargo build --release --locked

@@ -89,6 +89,9 @@ terminal = ["kitty"]
 # backend = "auto"
 # max_results = 50
 # show_hidden = false
+# A plocate/locate database to search instead of the system one (-d), e.g.
+# one built without root: updatedb.plocate -o ~/.cache/files.db -U ~ -l no
+# locate_db = "~/.cache/files.db"
 # `exclude` replaces this built-in list: names anywhere, or paths below a
 # root when they contain a slash; `*` and `?` match like a shell glob.
 # exclude = [".cache", ".local/share/Trash", ".git", "node_modules", "target",

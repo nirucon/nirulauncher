@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.7.0 (2026-11-09)
+
+- **Window swallowing toggle.** Quick Settings and NIRU Actions (*System*)
+  show *Window swallowing: on/off*, read from NIRUWM's `_NIRUWM_SWALLOW` root
+  property without starting a process (`--list-actions` asks
+  `niructl swallow status`); Enter runs `niructl swallow toggle`. With a
+  NIRUWM older than 0.19 the row reads *unavailable* with a note and does
+  nothing. Intent phrases: `window swallowing`, `swallow`,
+  `fönstersväljning`, `svälj fönster`.
+- **File search hint:** "/ for files" is no longer shown in the apps and
+  actions hints when `[files] enabled = false` (the `/` prefix already stayed
+  ordinary text then; a test now covers it). `--files` while turned off says
+  so in its hint.
+- **New optional `[files] locate_db`:** search a plocate/locate database you
+  built yourself (`-d`), e.g. `updatedb.plocate -o ~/.cache/files.db -U ~ -l no`
+  without root. A configured database that is missing is reported and the
+  next backend is used, never the system database in its place.
+- **Fix:** a search root whose path contains `[`, `*` or `?` (`~/Musik [2024]`)
+  was never found in a locate database, because locate treats such a plain
+  pattern as a whole-path glob, so the launcher fell back to fd. The coverage
+  check now uses an anchored regex for such roots.
+- **Verified with the real plocate 1.1.23** (Debian trixie package, unpacked
+  without root) and a user database from `updatedb.plocate -U HOME -l no`:
+  `-d`, `-0`, `-i`, `-l N`, `--regex` with several ANDed patterns, the
+  accent-alternation patterns (`faktura aao` finds `faktura-åäö.pdf`,
+  `lat ett rpp` finds `Låt ett.RPP`), regex characters in queries (`c++`,
+  `a.b`), names starting with `-`, hidden and excluded folders filtered,
+  files deleted since `updatedb` left out, and the coverage check. Note that
+  `LOCATE_PATH` alone does not work when the system database is missing
+  (plocate still opens the default first), hence `locate_db`.
+  `tests/files.sh` now runs these checks with a real plocate when one is
+  installed, and CI installs it.
+
 ## 0.6.0 (2026-11-09)
 
 - **File search** (`--files`, *Find files* in NIRU Actions, or `/ name` in

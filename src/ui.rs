@@ -533,7 +533,8 @@ impl Ui {
         } else if self.query.is_empty() {
             if self.mode == "agent" {
                 "Type a short prompt…".to_string()
-            } else if let Some(hint) = mode_hint(&self.mode, self.web_mode) {
+            } else if let Some(hint) = mode_hint(&self.mode, self.web_mode, self.cfg.files.enabled)
+            {
                 format!("{title} · {hint}")
             } else {
                 title.to_string()
@@ -2120,15 +2121,19 @@ pub(crate) fn truncate(text: &str, max_chars: i16) -> String {
     text.chars().take(max_chars - 1).collect::<String>() + "…"
 }
 
-/// The empty-query hint after a view's title.
-pub(crate) fn mode_hint(mode: &str, web: bool) -> Option<&'static str> {
+/// The empty-query hint after a view's title. `/ for files` is only offered
+/// while file search is on (`[files] enabled`).
+pub(crate) fn mode_hint(mode: &str, web: bool, files: bool) -> Option<&'static str> {
     if web {
         return Some("type a phrase or an address");
     }
     Some(match mode {
-        "apps" => "type an app, a keyword, 2+2 or / for files",
-        "actions" => "type an action, window, app, 2+2 or / for files",
-        "files" => "type a file or folder name · recent files first",
+        "apps" if files => "type an app, a keyword, 2+2 or / for files",
+        "apps" => "type an app, a keyword or 2+2",
+        "actions" if files => "type an action, window, app, 2+2 or / for files",
+        "actions" => "type an action, window, app or 2+2",
+        "files" if files => "type a file or folder name · recent files first",
+        "files" => "file search is off ([files] enabled = false)",
         "system-actions" => "type an action or 2+2",
         "windows" => "type a window title",
         "sound" => "type to filter devices and event sounds",
@@ -2144,6 +2149,27 @@ pub(crate) fn no_match_lines(query: &str) -> [String; 2] {
         format!("No matches. Press Super+S to search the web for ‘{query}’"),
         "Tab: switch view to web search · Backspace: edit · Esc: close".into(),
     ]
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::mode_hint;
+
+    #[test]
+    fn the_files_hint_follows_files_enabled() {
+        for mode in ["apps", "actions"] {
+            assert!(mode_hint(mode, false, true)
+                .unwrap()
+                .contains("/ for files"));
+            let off = mode_hint(mode, false, false).unwrap();
+            assert!(!off.contains("files"), "{mode}: {off}");
+        }
+        assert!(mode_hint("files", false, false).unwrap().contains("off"));
+        assert!(mode_hint("files", false, true).unwrap().contains("recent"));
+        assert!(!mode_hint("system-actions", false, true)
+            .unwrap()
+            .contains("files"));
+    }
 }
 
 #[cfg(test)]

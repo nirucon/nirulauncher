@@ -22,6 +22,7 @@ to a fixed action in the launcher catalogue.
 | Brightness up | `brightness up` | `ljusare` |
 | Brightness down | `brightness down` | `mörkare` |
 | Night light | `night light` | `nattljus` |
+| Window swallowing | `window swallowing`, `swallow` | `fönstersväljning`, `svälj fönster` |
 | Restore windows | `bring off-screen windows back` | `hämta tillbaka fönster` |
 | Wi-Fi on | `wifi on` | `slå på wifi` |
 | Wi-Fi off | `wifi off` | `stäng av wifi` |

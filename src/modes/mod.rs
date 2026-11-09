@@ -88,6 +88,7 @@ pub(crate) fn view_catalog(
         "clip" => job(Box::new(clip_provider_items), clip_static_items()),
         "actions" => {
             let mut items = action_static_items(cfg);
+            items.extend(switch_items(c, root, false));
             items.extend(window_items(c, root));
             items.extend(app_items(desktop::discover()));
             job(
@@ -99,14 +100,18 @@ pub(crate) fn view_catalog(
                 items,
             )
         }
-        "system-actions" => job(
-            Box::new(|| {
-                let mut items = action_provider_items();
-                items.extend(saved_action_rows());
-                items
-            }),
-            action_static_items(cfg),
-        ),
+        "system-actions" => {
+            let mut items = action_static_items(cfg);
+            items.extend(switch_items(c, root, false));
+            job(
+                Box::new(|| {
+                    let mut items = action_provider_items();
+                    items.extend(saved_action_rows());
+                    items
+                }),
+                items,
+            )
+        }
         "microphone" => job(Box::new(microphone_items), Vec::new()),
         "bluetooth" => job(Box::new(bluetooth_items), Vec::new()),
         "agent" => ready(agent_items()),
@@ -116,7 +121,7 @@ pub(crate) fn view_catalog(
             let name = m[DISCORD_MODE.len()..].to_string();
             job(Box::new(move || share_discord_items(&name)), Vec::new())
         }
-        "quick" => ready(quick_items()),
+        "quick" => ready(quick_items_with(switch_items(c, root, true))),
         "clipboard" => ready(clipboard_items()),
         "tailscale" => job(Box::new(tailscale_items), Vec::new()),
         "displays" => job(Box::new(display_items), Vec::new()),

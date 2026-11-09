@@ -627,6 +627,144 @@ pub(crate) fn quick_items() -> Vec<Item> {
     ]
 }
 
+/// A session switch of the window manager that it publishes on the root
+/// window as the text `on` or `off`. An older NIRUWM leaves the property
+/// unset, so the switch is shown as unavailable instead of offered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WmSwitch {
+    On,
+    Off,
+    Unsupported,
+}
+
+impl WmSwitch {
+    /// The property text (`on`, `off`), or the first line of
+    /// `niructl NAME status` (`swallow on`).
+    pub(crate) fn parse(text: &str) -> Self {
+        match text.split_whitespace().last().unwrap_or("") {
+            "on" => Self::On,
+            "off" => Self::Off,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
+/// The switches the launcher offers as toggle rows, with what each needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SwitchKind {
+    Swallow,
+}
+
+impl SwitchKind {
+    pub(crate) const ALL: [SwitchKind; 1] = [SwitchKind::Swallow];
+
+    pub(crate) fn property(self) -> &'static str {
+        match self {
+            Self::Swallow => "_NIRUWM_SWALLOW",
+        }
+    }
+
+    pub(crate) fn command(self) -> &'static str {
+        match self {
+            Self::Swallow => "swallow",
+        }
+    }
+}
+
+/// Read a switch from the root window (no child process).
+pub(crate) fn wm_switch(c: &RustConnection, root: Window, kind: SwitchKind) -> WmSwitch {
+    let Ok(atom) = intern(c, kind.property()) else {
+        return WmSwitch::Unsupported;
+    };
+    let Some(reply) = c
+        .get_property(false, root, atom, AtomEnum::ANY, 0, 16)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return WmSwitch::Unsupported;
+    };
+    WmSwitch::parse(&String::from_utf8_lossy(&reply.value))
+}
+
+/// The same switch through `niructl NAME status`, for listings without an
+/// X connection (`--list-actions`).
+pub(crate) fn wm_switch_from_niructl(kind: SwitchKind) -> WmSwitch {
+    match providers::output("niructl", &[kind.command(), "status"]) {
+        Ok(out) if out.status.success() => WmSwitch::parse(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or(""),
+        ),
+        _ => WmSwitch::Unsupported,
+    }
+}
+
+/// The toggle row of a switch: its state in the name, and `niructl NAME
+/// toggle` as the action. An unsupported switch is an information row.
+pub(crate) fn switch_item(kind: SwitchKind, state: WmSwitch, quick: bool) -> Item {
+    let (name, what, keywords, unavailable) = match kind {
+        SwitchKind::Swallow => (
+            "Window swallowing",
+            "a program started from a terminal takes its place",
+            "swallow swallowing terminal window hide toggle svälj sväljning fönster",
+            "The running NIRUWM cannot swallow; NIRUWM 0.19 or newer, then log out and in",
+        ),
+    };
+    let key = format!(
+        "{}:{}",
+        if quick { "quick" } else { "action" },
+        kind.command()
+    );
+    let group = if quick { "Quick Settings" } else { "System" };
+    let command = kind.command();
+    let (name, detail, target) = match state {
+        WmSwitch::On => (
+            format!("{name}: on"),
+            format!("Enter turns it off · {what} · niructl {command} toggle"),
+            spawn_niructl(&[command, "toggle"]),
+        ),
+        WmSwitch::Off => (
+            format!("{name}: off"),
+            format!("Enter turns it on · {what} · niructl {command} toggle"),
+            spawn_niructl(&[command, "toggle"]),
+        ),
+        WmSwitch::Unsupported => (
+            format!("{name}: unavailable"),
+            unavailable.to_string(),
+            Target::Info,
+        ),
+    };
+    Item {
+        key,
+        group: group.into(),
+        name,
+        detail,
+        keywords: keywords.into(),
+        favorite: false,
+        target,
+    }
+}
+
+/// Toggle rows for every switch, read from the root window.
+pub(crate) fn switch_items(c: &RustConnection, root: Window, quick: bool) -> Vec<Item> {
+    SwitchKind::ALL
+        .iter()
+        .map(|&kind| switch_item(kind, wm_switch(c, root, kind), quick))
+        .collect()
+}
+
+/// Quick Settings with the switch rows after the idle toggle.
+pub(crate) fn quick_items_with(switches: Vec<Item>) -> Vec<Item> {
+    let mut items = quick_items();
+    let at = items
+        .iter()
+        .position(|item| item.key == "quick:idle")
+        .map_or(items.len(), |i| i + 1);
+    items.splice(at..at, switches);
+    items
+}
+
 pub(crate) fn power_items() -> Vec<Item> {
     let Ok(output) = providers::output("niructl", &["powerprofile", "status"]) else {
         return vec![Item {
@@ -840,6 +978,11 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
             "Toggle picom transparency and shadows · niructl compositor toggle",
             spawn_niructl(&["compositor", "toggle"]),
         ),
+        I::Swallow => (
+            "Toggle window swallowing",
+            "A program started from a terminal takes its place · niructl swallow toggle",
+            spawn_niructl(&["swallow", "toggle"]),
+        ),
         I::WindowsRescue => (
             "Bring off-screen windows back",
             "Move managed windows onto a connected display · niructl windows rescue",
@@ -950,6 +1093,11 @@ pub(crate) fn sound_action_items() -> Vec<Item> {
 /// in a worker; `--list-actions` and the tests use this complete list.
 pub(crate) fn action_items(cfg: &Config) -> Vec<Item> {
     let mut items = action_command_rows();
+    items.extend(
+        SwitchKind::ALL
+            .iter()
+            .map(|&kind| switch_item(kind, wm_switch_from_niructl(kind), false)),
+    );
     items.extend(picker_rows());
     if cfg.files.enabled {
         items.push(Item {
@@ -1769,7 +1917,8 @@ mod intent_launcher_tests {
     use crate::wifi;
     use crate::{
         agent_command, filtered_for_mode, intent, intent_first_order, intent_item, intent_items,
-        savable_argv, Action, Config, Target,
+        quick_items, quick_items_with, savable_argv, switch_item, Action, Config, SwitchKind,
+        Target, WmSwitch,
     };
 
     #[test]
@@ -1858,6 +2007,57 @@ mod intent_launcher_tests {
             filtered_for_mode(&rows, "skriv en kort prompt", &usage, "agent"),
             vec![0]
         );
+    }
+
+    #[test]
+    fn switch_state_is_read_from_the_property_or_niructl() {
+        assert_eq!(WmSwitch::parse("on"), WmSwitch::On);
+        assert_eq!(WmSwitch::parse("off\n"), WmSwitch::Off);
+        assert_eq!(WmSwitch::parse("swallow on"), WmSwitch::On);
+        assert_eq!(WmSwitch::parse("swallow off"), WmSwitch::Off);
+        for text in ["", "maybe", "on off?", "1"] {
+            assert_eq!(WmSwitch::parse(text), WmSwitch::Unsupported, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_swallow_row_shows_its_state_and_toggles() {
+        let on = switch_item(SwitchKind::Swallow, WmSwitch::On, true);
+        assert_eq!(on.key, "quick:swallow");
+        assert_eq!(on.name, "Window swallowing: on");
+        assert!(on.detail.contains("turns it off"));
+        let Target::Spawn { argv, .. } = &on.target else {
+            panic!("the row must toggle");
+        };
+        assert_eq!(argv, &["niructl", "swallow", "toggle"]);
+        let off = switch_item(SwitchKind::Swallow, WmSwitch::Off, false);
+        assert_eq!(off.key, "action:swallow");
+        assert_eq!(off.group, "System");
+        assert_eq!(off.name, "Window swallowing: off");
+        assert!(off.detail.contains("turns it on"));
+        // An older NIRUWM: shown, but disabled with a note.
+        let old = switch_item(SwitchKind::Swallow, WmSwitch::Unsupported, true);
+        assert!(matches!(old.target, Target::Info));
+        assert!(old.name.ends_with("unavailable"));
+        assert!(old.detail.contains("NIRUWM 0.19"));
+    }
+
+    #[test]
+    fn quick_settings_puts_the_switches_after_idle() {
+        let rows = quick_items_with(vec![switch_item(SwitchKind::Swallow, WmSwitch::Off, true)]);
+        let idle = rows.iter().position(|r| r.key == "quick:idle").unwrap();
+        assert_eq!(rows[idle + 1].key, "quick:swallow");
+        assert_eq!(rows.len(), quick_items().len() + 1);
+    }
+
+    #[test]
+    fn the_swallow_intent_toggles() {
+        let found = intent::resolve("fönstersväljning");
+        let row = intent_item(&found[0], false);
+        let Target::Spawn { argv, .. } = &row.target else {
+            panic!("the intent must toggle");
+        };
+        assert_eq!(argv, &["niructl", "swallow", "toggle"]);
     }
 
     #[test]
