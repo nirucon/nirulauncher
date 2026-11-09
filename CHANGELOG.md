@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 (2026-11-09)
+
+- **Locks from the launcher are manual locks.** *Lock screen* in Quick
+  Settings, the *lock* intent and NIRU Actions run `niructl lock --manual`.
+  NIRULOCK 0.25 plays its optional pause music only for a manual lock, and a
+  plain `niructl lock` without a terminal (as the launcher starts it) now
+  counts as a script's lock and stays silent. An older NIRUWM ignores the
+  option and locks as before.
+
 ## 0.8.0 (2026-11-09)
 
 - **Studio mode toggle** for NIRUWM 0.20's studio (DAW) mode: Quick Settings

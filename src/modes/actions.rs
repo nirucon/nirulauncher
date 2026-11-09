@@ -610,7 +610,7 @@ pub(crate) fn quick_items() -> Vec<Item> {
             "quick:lock",
             "Lock screen",
             "Lock the current session",
-            spawn_niructl(&["lock"]),
+            spawn_niructl(&["lock", "--manual"]),
         ),
         item(
             "quick:update-restart",
@@ -905,7 +905,7 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
         I::Lock => (
             "Lock screen",
             "Lock now · niructl lock",
-            spawn_niructl(&["lock"]),
+            spawn_niructl(&["lock", "--manual"]),
         ),
         I::Logout => (
             "Log out",
@@ -1204,7 +1204,9 @@ pub(crate) fn picker_rows() -> Vec<Item> {
 pub(crate) fn action_command_rows() -> Vec<Item> {
     let mut items = Vec::new();
     for (name, detail, action) in [
-        ("Lock screen", "Lock now", "lock"),
+        // A lock chosen here is a manual lock, so NIRULOCK may play its
+        // pause music; `niructl lock` without a terminal would be silent.
+        ("Lock screen", "Lock now", "lock --manual"),
         ("Screensaver", "Show the screensaver now", "screensaver"),
         (
             "Reload configuration",
@@ -1947,6 +1949,27 @@ mod intent_launcher_tests {
             terminal: false,
             path: None,
         }
+    }
+
+    /// Every lock the launcher offers is a manual lock, so NIRULOCK's pause
+    /// music may play; a plain `niructl lock` without a terminal is silent.
+    #[test]
+    fn every_lock_action_is_a_manual_lock() {
+        let manual = |target: &Target, what: &str| match target {
+            Target::Spawn { argv, .. } => {
+                assert_eq!(argv, &["niructl", "lock", "--manual"], "{what}")
+            }
+            _ => panic!("{what}: not a spawn"),
+        };
+        let rows = intent_items("lock");
+        assert_eq!(rows.len(), 1);
+        manual(&rows[0].target, "intent");
+        let quick = quick_items();
+        let quick_lock = quick.iter().find(|i| i.key == "quick:lock").unwrap();
+        manual(&quick_lock.target, "quick settings");
+        let rows = super::action_command_rows();
+        let action = rows.iter().find(|i| i.name == "Lock screen").unwrap();
+        manual(&action.target, "actions");
     }
 
     #[test]
