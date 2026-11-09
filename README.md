@@ -38,6 +38,10 @@ second, competing settings implementation.
   emoji, ©, ®, ™, arrows, °, ±, currency and typographic quotes, English and
   Swedish names, recents first, skin tones, pasted where you were typing.
 - Colors view: the last colors picked with `nirushot pick` (`Super+Ctrl+C`).
+- Manual view (`--manual`, *Manual* in NIRU Actions, or the phrases `manual`,
+  `help`, `hjälp`): the chapters and headings of the installed NIRUX manual,
+  searchable by heading and by the text under it; Enter opens the chapter at
+  that heading with `nirux manual`.
 - File search (`--files`, *Find files* in NIRU Actions, or `/ name` in the
   unified view): your home folder through `plocate`, `fd` or a bounded
   built-in walk, recently used files first, without hidden folders, caches
@@ -113,6 +117,7 @@ Each view can be opened directly:
 | `--keys` | Keybinding cheat sheet |
 | `--emoji` | Emoji and symbol picker |
 | `--colors` | The last picked colors, and Pick color |
+| `--manual` | The NIRUX manual: chapters and headings, searchable |
 | `--files` | File search in the home folder, recent files first |
 | `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing |
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
@@ -170,6 +175,14 @@ size; the font is only read when the first emoji row is shown.
 **Colors.** `--colors` (or *Colors* in NIRU Actions) lists the last ten colors
 NIRUSHOT picked, newest first, with a swatch; Enter copies the hex value.
 *Pick color* runs `nirushot pick` (also `Super+Ctrl+C`).
+
+**Manual.** `--manual`, *Manual* in NIRU Actions, or the phrase `manual`,
+`help` or `hjälp` lists the chapters and their headings of the NIRUX manual
+installed with the release (the directory `nirux manual --path` prints).
+Typing searches the headings and the text under them. Enter runs
+`nirux manual CHAPTER#ANCHOR`, which opens the chapter at that heading
+(NIRUNOTE when installed). Without an installed manual the view says so and
+points to `nirux update`.
 
 **File search.** `--files`, *Find files* in NIRU Actions, or `/` followed by
 a name in the unified view (`Super+Shift+P`, also `Super+P` and `Super+A`):

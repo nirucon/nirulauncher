@@ -997,6 +997,11 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
             "A program started from a terminal takes its place · niructl swallow toggle",
             spawn_niructl(&["swallow", "toggle"]),
         ),
+        I::Manual => (
+            "Manual",
+            "Read the NIRUX manual · chapters and headings",
+            Target::Mode("manual".into()),
+        ),
         I::WindowsRescue => (
             "Bring off-screen windows back",
             "Move managed windows onto a connected display · niructl windows rescue",
@@ -1198,6 +1203,7 @@ pub(crate) fn picker_rows() -> Vec<Item> {
             "colors",
         ),
         crate::modes::colors::pick_item(),
+        crate::modes::manual::action_item(),
     ]
 }
 

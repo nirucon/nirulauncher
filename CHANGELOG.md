@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0 (2026-11-09)
+
+- **Manual view.** `nirulauncher --manual`, *Manual* in NIRU Actions and the
+  intent phrases `manual`, `help`, `hjälp`, `handbok`, `läs manualen` list the
+  chapters and headings of the NIRUX manual installed with the release (from
+  `nirux manual --path`). Typing searches headings and the text under them;
+  Enter runs `nirux manual CHAPTER#ANCHOR`, which opens the chapter at that
+  heading. Without an installed manual (NIRUX 0.12.245 and older) the view
+  shows one row saying so.
+
 ## 0.9.0 (2026-11-09)
 
 - **Locks from the launcher are manual locks.** *Lock screen* in Quick

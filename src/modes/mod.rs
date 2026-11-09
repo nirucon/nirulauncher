@@ -12,6 +12,7 @@ pub(crate) mod emoji;
 pub(crate) mod files;
 pub(crate) mod health;
 pub(crate) mod keys;
+pub(crate) mod manual;
 pub(crate) mod network;
 pub(crate) mod settings;
 pub(crate) mod web;
@@ -43,6 +44,7 @@ pub(crate) fn pending_item(mode: &str) -> Item {
         "displays" => ("Displays", "Loading displays…"),
         "power" => ("Power", "Loading power profiles…"),
         "keys" => ("Shortcuts", "Loading keybindings…"),
+        "manual" => ("", "Loading the manual…"),
         "themes" => ("Appearance", "Loading themes…"),
         "timing" => ("Timing", "Loading idle and lock timing…"),
         "input" => ("Input", "Loading input devices…"),
@@ -131,6 +133,7 @@ pub(crate) fn view_catalog(
         // built from the query, including when it is empty.
         "search" | "wifi" | "wired" => ready(Vec::new()),
         "keys" => job(Box::new(keys_items), Vec::new()),
+        "manual" => job(Box::new(manual::manual_items), Vec::new()),
         "emoji" => ready(emoji_items()),
         "colors" => ready(colors_items()),
         // The rows come from the query in a worker; see `files`.

@@ -456,6 +456,8 @@ impl Ui {
             "Emoji and symbols"
         } else if self.mode == "colors" {
             "Colors"
+        } else if self.mode == "manual" {
+            "Manual"
         } else if self.mode == "files" {
             "Find files"
         } else if self.web_mode {
@@ -598,8 +600,14 @@ impl Ui {
                     pal.accent,
                 )?;
             }
-            let heading = keys::is_heading(item);
-            let name_colour = if heading { pal.accent } else { pal.foreground };
+            let heading =
+                keys::is_heading(item) || (self.mode == "manual" && manual::is_chapter(item));
+            // A selected chapter row of the manual reads in the normal colour.
+            let name_colour = if heading && !(selected && self.mode == "manual") {
+                pal.accent
+            } else {
+                pal.foreground
+            };
             let detail_colour = pal.muted;
             let baseline = y + row / 2 + self.renderer.line_height / 2 - 2;
             let icon = row_icon(item, self.tone);
@@ -610,11 +618,13 @@ impl Ui {
             };
             let gap = " ".repeat(icon_cols.max(0) as usize);
             // Icon rows and the grouped cheat sheet show the name alone.
-            let name_only = icon.is_some() || self.mode == "keys";
+            let name_only = icon.is_some() || self.mode == "keys" || self.mode == "manual";
             let label = if heading {
                 item.name.clone()
             } else if self.mode == "keys" {
                 format!("  {}", item.name)
+            } else if self.mode == "manual" {
+                item.name.clone()
             } else if icon.is_some() {
                 format!("{gap}{}", item.name)
             } else if item.favorite {
@@ -799,6 +809,9 @@ impl Ui {
             )
         } else if self.mode == "colors" {
             "Enter copies the hex value · Esc close".to_string()
+        } else if self.mode == "manual" {
+            "Enter opens the manual at this heading · type to search headings and text · Esc close"
+                .to_string()
         } else if self.mode == "settings" {
             "Enter opens · Esc close · ↑↓ move".to_string()
         } else if self.mode == "themes" {
@@ -1330,7 +1343,15 @@ impl Ui {
             && self.catalog_rx.is_none()
             && !matches!(
                 self.mode.as_str(),
-                "agent" | "share-pair" | "wifi" | "wired" | "keys" | "emoji" | "colors" | "files"
+                "agent"
+                    | "share-pair"
+                    | "wifi"
+                    | "wired"
+                    | "keys"
+                    | "emoji"
+                    | "colors"
+                    | "files"
+                    | "manual"
             )
             && self.files_query().is_none()
     }

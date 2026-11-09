@@ -24,6 +24,7 @@ to a fixed action in the launcher catalogue.
 | Night light | `night light` | `nattljus` |
 | Studio mode | `studio mode`, `daw mode`, `recording mode` | `studioläge`, `inspelningsläge` |
 | Window swallowing | `window swallowing`, `swallow` | `fönstersväljning`, `svälj fönster` |
+| Manual | `manual`, `help`, `read the manual` | `hjälp`, `handbok`, `läs manualen` |
 | Restore windows | `bring off-screen windows back` | `hämta tillbaka fönster` |
 | Wi-Fi on | `wifi on` | `slå på wifi` |
 | Wi-Fi off | `wifi off` | `stäng av wifi` |

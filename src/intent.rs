@@ -34,6 +34,7 @@ pub enum IntentAction {
     Studio,
     Swallow,
     WindowsRescue,
+    Manual,
     WifiOn,
     WifiOff,
 }
@@ -62,6 +63,7 @@ impl IntentAction {
             Self::Studio => "studio",
             Self::Swallow => "swallow",
             Self::WindowsRescue => "windows-rescue",
+            Self::Manual => "manual",
             Self::WifiOn => "wifi-on",
             Self::WifiOff => "wifi-off",
         }
@@ -279,6 +281,23 @@ const CATALOGUE: &[Entry] = &[
             "radda fonster",
             "återställ fönster",
             "aterstall fonster",
+        ],
+    },
+    Entry {
+        action: IntentAction::Manual,
+        phrases: &[
+            "manual",
+            "help",
+            "hjälp",
+            "hjalp",
+            "handbok",
+            "handboken",
+            "manualen",
+            "nirux manual",
+            "open the manual",
+            "read the manual",
+            "läs manualen",
+            "las manualen",
         ],
     },
     Entry {
@@ -531,5 +550,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn manual_phrases_open_the_manual() {
+        for query in [
+            "manual",
+            "Help",
+            "hjälp",
+            "hjalp",
+            "handbok",
+            "läs manualen",
+        ] {
+            assert_eq!(action_for(query), Some(IntentAction::Manual), "{query}");
+        }
+        assert_eq!(action_for("manual labour"), None);
     }
 }

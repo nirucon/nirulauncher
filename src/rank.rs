@@ -390,7 +390,7 @@ pub(crate) fn ranked_for_mode(
             recent: 0..0,
         };
     }
-    if matches!(mode, "keys" | "emoji" | "colors") && query.trim().is_empty() {
+    if matches!(mode, "keys" | "emoji" | "colors" | "manual") && query.trim().is_empty() {
         // Grouped in NIRUWM's order, recents first, newest color first.
         return Ranked {
             order: (0..items.len()).collect(),
