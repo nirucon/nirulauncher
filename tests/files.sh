@@ -77,9 +77,11 @@ FAKE
 chmod +x "$T/bin/xdg-open" "$T/bin/plocate"
 find "$H" > "$T/locate.db"
 
+# TMPDIR: the launcher stops the fake plocate early, before it removes its
+# scratch file, so that file must land in $T.
 export HOME="$H" XDG_CONFIG_HOME="$H/.config" XDG_DATA_HOME="$H/.local/share" \
   XDG_STATE_HOME="$T/state" LOG="$T/log" LOCATE_DB="$T/locate.db" \
-  PATH="$T/bin:$PATH"
+  PATH="$T/bin:$PATH" TMPDIR="$T"
 : > "$LOG"
 CONFIG="$H/.config/nirulauncher/config.toml"
 
