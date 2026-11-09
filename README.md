@@ -43,8 +43,9 @@ second, competing settings implementation.
   built-in walk, recently used files first, without hidden folders, caches
   and build output. Enter opens, Ctrl+Enter opens the folder, Shift+Enter
   copies the path.
-- Quick Settings and NIRU Actions show the current state of NIRUWM's window
-  swallowing and toggle it (`niructl swallow toggle`).
+- Quick Settings and NIRU Actions show the current state of NIRUWM's studio
+  mode and window swallowing and toggle them (`niructl studio toggle`,
+  `niructl swallow toggle`); intent phrases `studio mode` / `studioläge`.
 - Calculator row (`2+2*3`, `15% of 240`), copied with Enter.
 - Optional OpenCode handoff through `niructl agent`, never auto-approved.
 - HiDPI scaling from `Xft.dpi`, dead-key composition and AltGr levels.

@@ -31,6 +31,7 @@ pub enum IntentAction {
     BrightnessDown,
     NightLight,
     Compositor,
+    Studio,
     Swallow,
     WindowsRescue,
     WifiOn,
@@ -58,6 +59,7 @@ impl IntentAction {
             Self::BrightnessDown => "brightness-down",
             Self::NightLight => "night-light",
             Self::Compositor => "compositor",
+            Self::Studio => "studio",
             Self::Swallow => "swallow",
             Self::WindowsRescue => "windows-rescue",
             Self::WifiOn => "wifi-on",
@@ -233,6 +235,21 @@ const CATALOGUE: &[Entry] = &[
         ],
     },
     Entry {
+        action: IntentAction::Studio,
+        phrases: &[
+            "studio mode",
+            "toggle studio mode",
+            "daw mode",
+            "recording mode",
+            "studioläge",
+            "studiolage",
+            "studioläget",
+            "studiolaget",
+            "inspelningsläge",
+            "inspelningslage",
+        ],
+    },
+    Entry {
         action: IntentAction::Swallow,
         phrases: &[
             "swallow",
@@ -397,6 +414,7 @@ mod tests {
             ("night light", IntentAction::NightLight),
             ("compositor", IntentAction::Compositor),
             ("window swallowing", IntentAction::Swallow),
+            ("studio mode", IntentAction::Studio),
             ("bring off-screen windows back", IntentAction::WindowsRescue),
             ("wifi on", IntentAction::WifiOn),
             ("wifi off", IntentAction::WifiOff),
@@ -426,6 +444,7 @@ mod tests {
             ("mörkare", IntentAction::BrightnessDown),
             ("nattljus", IntentAction::NightLight),
             ("fönstersväljning", IntentAction::Swallow),
+            ("studioläge", IntentAction::Studio),
             ("SVÄLJ FÖNSTER", IntentAction::Swallow),
             ("hämta tillbaka fönster", IntentAction::WindowsRescue),
             ("slå på wifi", IntentAction::WifiOn),
@@ -470,7 +489,10 @@ mod tests {
 
     #[test]
     fn generic_words_stay_ordinary_searches() {
-        for query in ["stop", "on", "off", "up", "down", "av", "läge", "restart"] {
+        // "studio" stays a search: OBS Studio, Android Studio.
+        for query in [
+            "stop", "on", "off", "up", "down", "av", "läge", "restart", "studio",
+        ] {
             assert!(resolve(query).is_empty(), "{query} must not route");
         }
     }

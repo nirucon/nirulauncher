@@ -70,7 +70,10 @@ The Quick Settings entry **Wired network** is shown when an Ethernet interface
 exists. **Window swallowing: on/off** (Quick Settings, and *System* in NIRU
 Actions) shows NIRUWM's session switch, read from the root property
 `_NIRUWM_SWALLOW`, and Enter runs `niructl swallow toggle`. With a NIRUWM older
-than 0.19 the row reads *unavailable* and does nothing. A successful launcher-initiated Wi-Fi or wired connection sends a normal
+than 0.19 the row reads *unavailable* and does nothing. **Studio mode: on/off**
+works the same way with `_NIRUWM_STUDIO` and `niructl studio toggle` (NIRUWM
+0.20): no screen saver, idle lock or popups, compositor off and the
+performance profile while it is on, all put back when it goes off. A successful launcher-initiated Wi-Fi or wired connection sends a normal
 NIRUNOTIFY notification with the network/interface, security/state and address;
 passwords are never included.
 
@@ -82,7 +85,7 @@ phrase is only matched after case, whitespace and punctuation normalization; it
 never becomes a shell command and the typed text is never inserted into argv.
 Supported English phrases include lock, logout, reboot, shutdown, focus mode,
 presentation mode, stop context, DND, keep awake, volume and microphone mute,
-brightness, night light, compositor, window swallowing, off-screen window
+brightness, night light, compositor, studio mode, window swallowing, off-screen window
 rescue and Wi-Fi radio
 on/off through NetworkManager (`nmcli`). Additional language aliases are listed
 in [Intent aliases](docs/ALIASES.md). Missing `nmcli` shows an unavailable info

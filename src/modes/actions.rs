@@ -653,20 +653,23 @@ impl WmSwitch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SwitchKind {
     Swallow,
+    Studio,
 }
 
 impl SwitchKind {
-    pub(crate) const ALL: [SwitchKind; 1] = [SwitchKind::Swallow];
+    pub(crate) const ALL: [SwitchKind; 2] = [SwitchKind::Studio, SwitchKind::Swallow];
 
     pub(crate) fn property(self) -> &'static str {
         match self {
             Self::Swallow => "_NIRUWM_SWALLOW",
+            Self::Studio => "_NIRUWM_STUDIO",
         }
     }
 
     pub(crate) fn command(self) -> &'static str {
         match self {
             Self::Swallow => "swallow",
+            Self::Studio => "studio",
         }
     }
 }
@@ -709,6 +712,12 @@ pub(crate) fn switch_item(kind: SwitchKind, state: WmSwitch, quick: bool) -> Ite
             "a program started from a terminal takes its place",
             "swallow swallowing terminal window hide toggle svälj sväljning fönster",
             "The running NIRUWM cannot swallow; NIRUWM 0.19 or newer, then log out and in",
+        ),
+        SwitchKind::Studio => (
+            "Studio mode",
+            "no screen saver, lock or popups, compositor off, performance",
+            "studio daw recording record reaper music mode studioläge inspelning",
+            "The running NIRUWM has no studio mode; NIRUWM 0.20 or newer, then log out and in",
         ),
     };
     let key = format!(
@@ -977,6 +986,11 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
             "Compositor",
             "Toggle picom transparency and shadows · niructl compositor toggle",
             spawn_niructl(&["compositor", "toggle"]),
+        ),
+        I::Studio => (
+            "Toggle studio mode",
+            "No screen saver, lock or popups; compositor off; performance · niructl studio toggle",
+            spawn_niructl(&["studio", "toggle"]),
         ),
         I::Swallow => (
             "Toggle window swallowing",
@@ -2048,6 +2062,29 @@ mod intent_launcher_tests {
         let idle = rows.iter().position(|r| r.key == "quick:idle").unwrap();
         assert_eq!(rows[idle + 1].key, "quick:swallow");
         assert_eq!(rows.len(), quick_items().len() + 1);
+    }
+
+    #[test]
+    fn the_studio_row_and_intent_toggle_studio_mode() {
+        let on = switch_item(SwitchKind::Studio, WmSwitch::On, true);
+        assert_eq!(on.key, "quick:studio");
+        assert_eq!(on.name, "Studio mode: on");
+        let Target::Spawn { argv, .. } = &on.target else {
+            panic!("the row must toggle");
+        };
+        assert_eq!(argv, &["niructl", "studio", "toggle"]);
+        let old = switch_item(SwitchKind::Studio, WmSwitch::Unsupported, false);
+        assert!(matches!(old.target, Target::Info));
+        assert!(old.detail.contains("NIRUWM 0.20"));
+        for phrase in ["studio mode", "studioläge", "Studiolage", "daw mode"] {
+            let found = intent::resolve(phrase);
+            assert_eq!(found.len(), 1, "{phrase}");
+            let row = intent_item(&found[0], false);
+            let Target::Spawn { argv, .. } = &row.target else {
+                panic!("the intent must toggle");
+            };
+            assert_eq!(argv, &["niructl", "studio", "toggle"], "{phrase}");
+        }
     }
 
     #[test]

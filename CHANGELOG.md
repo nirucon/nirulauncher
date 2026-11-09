@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 (2026-11-09)
+
+- **Studio mode toggle** for NIRUWM 0.20's studio (DAW) mode: Quick Settings
+  and NIRU Actions (*System*) show *Studio mode: on/off*, read from the root
+  property `_NIRUWM_STUDIO`, and Enter runs `niructl studio toggle`. With an
+  older NIRUWM the row reads *unavailable* with a note and does nothing.
+- Intent phrases `studio mode`, `toggle studio mode`, `daw mode`,
+  `recording mode`, `studioläge`, `inspelningsläge` (and the forms without
+  diacritics). A bare `studio` stays an ordinary search (OBS Studio,
+  Android Studio).
+
 ## 0.7.0 (2026-11-09)
 
 - **Window swallowing toggle.** Quick Settings and NIRU Actions (*System*)
