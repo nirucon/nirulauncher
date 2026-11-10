@@ -92,13 +92,18 @@ Default NIRUWM keys:
 | Keys | View |
 |---|---|
 | `Super+P` | Applications |
-| `Super+Shift+P` | Applications, windows, actions and settings in one view |
+| `Super+Shift+P` (also `Super+Shift+B`, `Super+Shift+M`) | Applications, windows, actions and settings in one view |
 | `Super+A` | NIRU Actions |
 | `Super+S` | Web search |
 | `Super+V` | Clipboard history |
-| `Super+/` | Keybinding cheat sheet |
+| `Super+O` | File search |
+| `Super+/` or `Super+F1` | Keybinding cheat sheet |
+| `Super+Shift+F1` | The NIRUX manual |
 | `Super+.` | Emoji and symbols |
 | `Alt+Tab`, `Super+W`, `Super+grave` | Window switcher |
+
+On Swedish, German and similar layouts `/` is `Shift+7`, so use `Super+F1` for
+the cheat sheet there. `nirux manual launcher` describes every view.
 
 Inside the launcher: ↑/↓ and Tab move, PageUp/PageDown page, Home/End jump,
 Enter opens, Escape closes, Ctrl+Backspace deletes a word, Ctrl+P pins or
@@ -176,7 +181,7 @@ size; the font is only read when the first emoji row is shown.
 NIRUSHOT picked, newest first, with a swatch; Enter copies the hex value.
 *Pick color* runs `nirushot pick` (also `Super+Ctrl+C`).
 
-**Manual.** `--manual`, *Manual* in NIRU Actions, or the phrase `manual`,
+**Manual.** `Super+Shift+F1`, `--manual`, *Manual* in NIRU Actions, or the phrase `manual`,
 `help` or `hjälp` lists the chapters and their headings of the NIRUX manual
 installed with the release (the directory `nirux manual --path` prints).
 Typing searches the headings and the text under them. Enter runs
@@ -184,11 +189,9 @@ Typing searches the headings and the text under them. Enter runs
 (NIRUNOTE when installed). Without an installed manual the view says so and
 points to `nirux update`.
 
-**File search.** `--files`, *Find files* in NIRU Actions, or `/` followed by
-a name in the unified view (`Super+Shift+P`, also `Super+P` and `Super+A`):
-`/ faktura` or `/faktura 2024`. NIRUWM has no default key for it; bind one
-with a `[[keys]]` entry that runs `nirulauncher --files` (for example
-`Super+O`, free in NIRUWM's defaults).
+**File search.** `Super+O`, `--files`, *Find files* in NIRU Actions, or `/`
+followed by a name in the unified view (`Super+Shift+P`, also `Super+P` and
+`Super+A`): `/ faktura` or `/faktura 2024`.
 
 - An empty field (or a lone `/`) lists recently used files
   (`~/.local/share/recently-used.xbel`), newest first, marked ↺. While
@@ -256,7 +259,7 @@ addresses are opened. `enabled = false` on a built-in id turns that engine off.
 `exclude` replaces the built-in list of skipped names (a name such as
 `node_modules` or `*.o`, or a path below a root such as `.local/share/Trash`);
 the built-in list is in [config.example.toml](config.example.toml).
-Set `NIRU_UI_SCALE` (0.75–2.5) to override HiDPI detection, or `1` to disable
+Set `NIRU_UI_SCALE` (0.75 to 2.5) to override HiDPI detection, or `1` to disable
 it. Check a file with `nirulauncher --check-config`.
 
 ## Files and paths
