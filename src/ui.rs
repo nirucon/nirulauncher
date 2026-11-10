@@ -503,6 +503,8 @@ impl Ui {
             "Sound"
         } else if self.mode == "clip" {
             "Capture"
+        } else if self.mode.starts_with(CLIP_INPUTS_MODE) {
+            "Microphone inputs"
         } else if self.mode == "system-actions" {
             "NIRU Actions"
         } else if self.items.iter().all(|item| item.group == "Power") {
@@ -790,6 +792,8 @@ impl Ui {
             "Enter selects or acts · Esc close · ↑↓ move".to_string()
         } else if self.mode == "clip" {
             "Enter starts or stops capture · Esc close · ↑↓ move".to_string()
+        } else if self.mode.starts_with(CLIP_INPUTS_MODE) {
+            "Enter chooses the inputs · Esc close · ↑↓ move".to_string()
         } else if self.web_mode {
             "Enter opens search · Tab moves · Esc closes".to_string()
         } else if self.mode == "keys" && self.capture {
@@ -1399,7 +1403,17 @@ impl Ui {
         let error = std::mem::take(&mut self.error);
         self.items.truncate(self.plain_items);
         self.items.retain(|item| !is_pending(item));
-        self.items.extend(rows);
+        // A provider row with the key of a row already shown replaces it.
+        let shown = self.items.len();
+        for row in rows {
+            match self.items[..shown]
+                .iter()
+                .position(|item| item.key == row.key)
+            {
+                Some(index) => self.items[index] = row,
+                None => self.items.push(row),
+            }
+        }
         if self.catalog_favorites {
             mark_favorites(&mut self.items, &self.cfg);
         }
@@ -1453,6 +1467,12 @@ impl Ui {
     }
 
     pub(crate) fn switch_mode(&mut self, mode: &str) -> Result<()> {
+        if let Some(choice) = mode.strip_prefix(CLIP_SET_INPUTS) {
+            if let Some((value, source)) = choice.split_once('\t') {
+                save_input(source, value);
+            }
+            return self.switch_mode("clip");
+        }
         if mode == "wifi" {
             return self.enter_wifi();
         }
@@ -1960,13 +1980,21 @@ impl Ui {
                             // Enter before the provider rows arrived acts on
                             // the best match once they are there; in file
                             // search, on the rows of the query as typed.
+                            // The recording rows take the chosen inputs once
+                            // the microphones are read: wait on the row.
+                            let clip_inputs = self.mode == "clip"
+                                && self.catalog_rx.is_some()
+                                && has_input_choices();
                             let waiting = (self.catalog_rx.is_some()
                                 && self
                                     .filtered
                                     .get(self.selected)
                                     .map_or(true, |&index| is_pending(&self.items[index])))
                                 || (self.files.rx.is_some() && self.files_query().is_some());
-                            if waiting {
+                            if clip_inputs && !waiting {
+                                self.moved = true;
+                            }
+                            if waiting || clip_inputs {
                                 self.enter_after_load = true;
                             } else if !self.activate()? {
                                 self.close()?;

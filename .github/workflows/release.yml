@@ -39,6 +39,7 @@ jobs:
           sh tests/event-sounds.sh target/x86_64-unknown-linux-musl/release/nirulauncher
           sh tests/pickers.sh target/x86_64-unknown-linux-musl/release/nirulauncher
           sh tests/files.sh target/x86_64-unknown-linux-musl/release/nirulauncher
+          sh tests/clip-inputs.sh target/x86_64-unknown-linux-musl/release/nirulauncher
       - name: Collect assets
         run: |
           mkdir -p dist

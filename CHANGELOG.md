@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.0 (2026-11-10)
+
+- **Microphone inputs of a multichannel interface** in the Capture view
+  (`--clip`), for NIRUCLIP 0.7.0 and newer. When `niruclip --list-mics --json`
+  reports a source with more than two channels (a Behringer UMC1820 has 18),
+  a row *Mic inputs · CHOICE* appears for it. Enter opens a picker: all
+  inputs, each input alone as mono, or the adjacent pairs 1+2, 3+4 and so on
+  as stereo. When the interface is not the microphone NIRUCLIP would use,
+  the picker also offers *Not used*, and choosing inputs records from the
+  interface (`--mic NAME`). The choice is remembered per source in
+  `~/.local/state/nirulauncher/clip-inputs.tsv`, never in NIRUCLIP's config.
+- The recording rows (full screen, region, webcam, camera corners) then pass
+  `--mic-channels N`, `N,M` or `all`. A profile gets `--mic-channels` when its
+  microphone is the interface and it does not set `mic_channels` itself; its
+  row shows the inputs. Profiles with desktop audio or no audio are unchanged.
+- The microphones are read in the worker that already reads the profiles, so
+  the view paints at once. Enter on a recording row before they are read
+  waits for them, but only after a choice has been made.
+- Without a multichannel source, or with an older NIRUCLIP, the view is
+  exactly as before.
+
 ## 0.10.0 (2026-11-09)
 
 - **Manual view.** `nirulauncher --manual`, *Manual* in NIRU Actions and the

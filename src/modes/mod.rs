@@ -36,6 +36,7 @@ pub(crate) fn pending_item(mode: &str) -> Item {
             "Checking NIRUX, audio, network, display and capture…",
         ),
         "clip" => ("Capture", "Loading capture profiles…"),
+        m if m.starts_with(CLIP_INPUTS_MODE) => ("Inputs", "Loading inputs…"),
         "microphone" => ("Audio", "Loading microphones…"),
         "bluetooth" => ("Bluetooth", "Loading Bluetooth…"),
         "share" => ("NIRU Share", "Loading NIRU Share…"),
@@ -88,6 +89,10 @@ pub(crate) fn view_catalog(
     let ready = |items: Vec<Item>| ViewCatalog { items, job: None };
     match mode {
         "clip" => job(Box::new(clip_provider_items), clip_static_items()),
+        m if m.starts_with(CLIP_INPUTS_MODE) => {
+            let source = m[CLIP_INPUTS_MODE.len()..].to_string();
+            job(Box::new(move || clip_input_items(&source)), Vec::new())
+        }
         "actions" => {
             let mut items = action_static_items(cfg);
             items.extend(switch_items(c, root, false));

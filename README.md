@@ -128,7 +128,7 @@ Each view can be opened directly:
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
-| `--clip` | NIRUCLIP capture profiles, overlays, camera check and preview, MP4/GIF export and sharing, recovery and status |
+| `--clip` | NIRUCLIP capture profiles, overlays, camera check and preview, MP4/GIF export and sharing, recovery and status, inputs of a multichannel interface |
 | `--share`, `--share-pair` | NIRUSHARE devices, inbox, pairing and Discord webhooks |
 | `--health` | Installed/running, session, audio, network, display and capture status |
 | `--agent` | Short OpenCode prompt, then a centred terminal |
@@ -147,6 +147,18 @@ posts exactly what the preview showed; **Cancel** goes back to Share. The
 "Sent to Discord" notification has **Undo** for 5 minutes. The launcher only
 ever sees webhook names, never their URLs. With an older NIRUSHARE the
 Discord rows simply do not appear.
+
+**Inputs of a multichannel interface.** With NIRUCLIP 0.7.0 or newer, the
+Capture view (`--clip`) shows *Mic inputs* when an audio interface with more
+than two channels is connected (a Behringer UMC1820 has 18); without one the
+view is unchanged. Enter opens a picker with *All inputs*, every input alone
+as mono and the pairs 1+2, 3+4 and so on as stereo. The choice is remembered
+per interface (in `~/.local/state/nirulauncher/clip-inputs.tsv`, not in
+NIRUCLIP's config) and shown on the row, and the recording rows then start
+NIRUCLIP with `--mic-channels`. If the interface is not the microphone
+NIRUCLIP would use (the system default or `mic =` in its config), the picker
+also has *Not used*, and choosing inputs records from the interface. A profile
+on the interface gets the same inputs unless it sets `mic_channels` itself.
 
 **Keybinding cheat sheet (`Super+/`).** Every key in effect, from
 `niructl keys --json` (NIRUWM 0.18 or newer): NIRUWM's bindings, including

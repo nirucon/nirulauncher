@@ -382,7 +382,10 @@ pub(crate) fn ranked_for_mode(
             recent: 0..0,
         };
     }
-    if mode.starts_with(crate::modes::actions::DISCORD_MODE) && query.trim().is_empty() {
+    if (mode.starts_with(crate::modes::actions::DISCORD_MODE)
+        || mode.starts_with(crate::modes::clip::CLIP_INPUTS_MODE))
+        && query.trim().is_empty()
+    {
         // The Discord preview reads top to bottom: target, content, text,
         // then Send and Cancel. Ranking must not reorder it.
         return Ranked {
