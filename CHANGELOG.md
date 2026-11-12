@@ -1,11 +1,13 @@
 # Changelog
 
-## 0.12.0 (2026-11-12)
+## 0.12.1 (2026-11-12)
+
+0.12.0 was tagged but not released (formatting check); 0.12.1 is the same with the code formatted.
 
 - **Settings history in NIRU Actions** (`Super+A`, Appearance): *Undo the
   last settings change* (asks first, runs `niructl config undo`), *Settings
   history* and *Settings that differ from the defaults* (in a terminal that
-  stays open). Needs NIRUWM 0.25.0.
+  stays open). Needs NIRUWM 0.25.1.
 - *Reset bar configuration* now only runs `nirubar --reset-config`, which
   keeps the old file in the settings history and reloads the bars itself.
 - Tests that change `HOME` or the XDG folders share one lock, and the manual

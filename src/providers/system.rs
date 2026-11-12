@@ -152,7 +152,6 @@ pub(crate) fn load_saved_actions() -> Vec<saved::SavedAction> {
 mod nirux_update_tests {
     use crate::{installed_nirux_version, is_newer_version, nirux_update_available};
 
-
     struct Sandbox {
         dir: std::path::PathBuf,
         _guard: std::sync::MutexGuard<'static, ()>,
