@@ -289,6 +289,23 @@ impl Renderer {
         self.put(c, gc, x, y, size, &composed)
     }
 
+    /// Copy opaque 0x00RRGGBB pixels, `width` per row, to the backing pixmap.
+    pub fn pixels(
+        &self,
+        c: &RustConnection,
+        gc: Gcontext,
+        x: i16,
+        y: i16,
+        width: u16,
+        pixels: &[u32],
+    ) -> crate::Result<()> {
+        if width == 0 || pixels.is_empty() {
+            return Ok(());
+        }
+        let whole = pixels.len() - pixels.len() % usize::from(width);
+        self.put(c, gc, x, y, width, &pixels[..whole])
+    }
+
     fn put(
         &self,
         c: &RustConnection,

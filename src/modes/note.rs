@@ -108,6 +108,30 @@ pub(crate) fn save_note(cfg: &Config, text: &str) -> Result<std::path::PathBuf> 
     Ok(path)
 }
 
+/// The text of `--note --stdin`, or None when there is nothing to save.
+pub(crate) fn stdin_text(input: &str) -> Option<String> {
+    let text = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+/// `--note --stdin`: save standard input to the inbox like the quick note's
+/// first row (no window, no sharing) and print the inbox path.
+pub(crate) fn run_stdin() -> Result<()> {
+    let cfg = Config::load()?;
+    let mut input = String::new();
+    // A note is short; a runaway pipe is cut at 64 KiB.
+    std::io::stdin()
+        .take(64 * 1024)
+        .read_to_string(&mut input)?;
+    let Some(text) = stdin_text(&input) else {
+        eprintln!("nirulauncher: the note is empty; nothing was saved");
+        std::process::exit(1);
+    };
+    let path = save_note(&cfg, &text)?;
+    println!("{}", path.display());
+    Ok(())
+}
+
 /// The local time as `YYYY-MM-DD HH:MM`, through libc so no date crate is needed.
 fn local_minute() -> String {
     let now = std::time::SystemTime::now()
@@ -180,6 +204,36 @@ mod tests {
             note_line("  köp\nmjölk  ", "2026-11-12 09:41"),
             "- 2026-11-12 09:41 köp mjölk\n"
         );
+    }
+
+    #[test]
+    fn stdin_notes_are_trimmed_and_empty_is_refused() {
+        assert_eq!(stdin_text("  köp mjölk\n").as_deref(), Some("köp mjölk"));
+        assert_eq!(
+            stdin_text("rad ett\nrad två\n").as_deref(),
+            Some("rad ett rad två")
+        );
+        assert_eq!(stdin_text(""), None);
+        assert_eq!(stdin_text(" \n\t "), None);
+    }
+
+    #[test]
+    fn a_stdin_note_lands_in_the_inbox() {
+        let _guard = crate::test_env_lock();
+        let dir = std::env::temp_dir().join(format!("nirulauncher-note-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = Config {
+            note_file: dir.join("Notes/inbox.md").display().to_string(),
+            ..Config::default()
+        };
+        let text = stdin_text("ring Anna\n").unwrap();
+        let path = save_note(&cfg, &text).unwrap();
+        save_note(&cfg, "andra").unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.starts_with("# Inbox\n\n- "));
+        assert!(saved.lines().nth(2).unwrap().ends_with(" ring Anna"));
+        assert!(saved.lines().nth(3).unwrap().ends_with(" andra"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

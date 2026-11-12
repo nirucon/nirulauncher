@@ -25,10 +25,11 @@ jobs:
           sh tests/pickers.sh target/release/nirulauncher
           sh tests/files.sh target/release/nirulauncher
           sh tests/clip-inputs.sh target/release/nirulauncher
+          sh tests/overview.sh target/release/nirulauncher
       - name: Shellcheck
         run: |
           docker run --rm -v "$PWD":/src:ro koalaman/shellcheck:stable \
-            -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh /src/tests/first-paint.sh /src/tests/event-sounds.sh /src/tests/pickers.sh /src/tests/files.sh /src/tests/clip-inputs.sh
+            -S warning -s sh /src/install.sh /src/tests/ui-smoke.sh /src/tests/first-paint.sh /src/tests/event-sounds.sh /src/tests/pickers.sh /src/tests/files.sh /src/tests/clip-inputs.sh /src/tests/overview.sh
   msrv:
     # The declared rust-version and Debian 13's rustc must build the locked tree.
     runs-on: ubuntu-latest

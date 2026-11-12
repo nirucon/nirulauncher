@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.14.0 (2026-11-12)
+
+- **Workspace overview** (`--overview`, Super+E in NIRUWM): one card
+  per tag on every monitor, with the thumbnail NIRUWM saved, the tag number
+  and the window titles. Number keys pick a tag on the focused monitor,
+  arrows, Tab, Home and End move, Enter or a click goes there through
+  `niructl do goto`, Escape or a click outside closes. Missing pictures show
+  a plain card; a missing or newer `state.json` shows a short message.
+  `--overview` no longer opens the window switcher; use `--windows`.
+- **`--apps --query TEXT --launch-best`** for NIRUDICTATE's voice commands:
+  starts the app the text clearly means (`launched<TAB>Name`) or opens the
+  Apps view with the text typed (`shown`). The rule is in the README.
+  `--apps --query TEXT` alone opens the Apps view with the text typed.
+- **`--note --stdin`** saves standard input to the inbox like the quick
+  note, without a window, and prints the inbox path; an empty note exits 1.
+
 ## 0.13.1 (2026-11-12)
 
 - The window jump labels show their letters. The drawing was never sent to

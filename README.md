@@ -101,6 +101,9 @@ Default NIRUWM keys:
 | `Super+Shift+F1` | The NIRUX manual |
 | `Super+.` | Emoji and symbols |
 | `Alt+Tab`, `Super+W`, `Super+grave` | Window switcher |
+| `Super+E` | Workspace overview |
+| `Ctrl+Alt+W` | Window jump |
+| `Super+Shift+N` | Quick note |
 
 On Swedish, German and similar layouts `/` is `Shift+7`, so use `Super+F1` for
 the cheat sheet there. `nirux manual launcher` describes every view.
@@ -113,9 +116,10 @@ Each view can be opened directly:
 
 | Option | View |
 |---|---|
-| `--apps` | Application search (default) |
+| `--apps` | Application search (default); `--apps --query TEXT` opens it with TEXT typed |
 | `--actions` / `--system-actions` | Grouped NIRU Actions / the focused actions view |
-| `--windows` (alias `--overview`) | Window switcher |
+| `--windows` | Window switcher |
+| `--overview` | Workspace overview with thumbnails (Super+E in NIRUWM); see below |
 | `--search [PHRASE]` | Web search, optionally with the phrase filled in |
 | `--quick` | Quick Settings |
 | `--clipboard` | Clipboard history |
@@ -134,10 +138,39 @@ Each view can be opened directly:
 | `--agent` | Short OpenCode prompt, then a centred terminal |
 | `--hints` | Label every visible window; type a label to focus it (`[hints] style`: letters or numbers) |
 | `--note` | One-line quick note to the inbox file (`[note] file`), optionally also to Discord or a device through NIRUSHARE |
+| `--note --stdin` | Save standard input to the inbox without a window and print the inbox path (exit 1 when empty) |
+| `--apps --query TEXT --launch-best` | Start the app TEXT clearly means, or open the Apps view with TEXT typed (see below) |
 
 Non-interactive helpers: `--list`, `--list-actions`, `--list-search`,
 `--wifi-status`, `--wifi-scan`, `--wired-status`, `--list-files QUERY`,
 `--check-config` and `--version`.
+
+**Workspace overview (`Super+E`).** A NIRUWM with the overview saves a small
+picture of each tag when you leave it and, on Super+E, writes the state of
+every monitor to `$XDG_RUNTIME_DIR/niruwm/overview/` and opens
+`nirulauncher --overview`. The overview shows, on the focused monitor, one
+section per monitor and one card per tag that has windows (plus the tag on
+screen): its picture, the tag number and the first window titles. Number keys
+1 to 9 (0 is tag 10) go straight to that tag on the focused monitor, the
+arrows, Tab, Home and End move, Enter or a click on a card goes there, and
+Escape or a click outside closes. Going there runs
+`niructl do goto MONITOR TAG [WINDOW]`, which also focuses the window that
+was focused on that tag. A tag without a picture yet shows a plain card;
+without any state from NIRUWM a short message says so. Nothing is composited
+or animated, and the pictures never leave the runtime directory.
+
+**Start the app a phrase means (`--launch-best`).** NIRUDICTATE's voice
+commands ("open nirunote", "starta miniräknare") run
+`nirulauncher --apps --query TEXT --launch-best`. The apps are ranked exactly
+as in the Apps view. The first one is started, and `launched<TAB>Name` is
+printed, only when the match is clear: the whole name (spaces, case and
+accents ignored, so "niru note" is NIRUNOTE), a whole keyword or the start of
+the name, the start of a word in the name or keywords, or text inside the
+name, and no other app matches as well. When several match equally well
+("terminal" with three terminal emulators), a pinned favourite or clearly more
+use (at least twice the launches recently) decides; otherwise the Apps view
+opens with the text typed and `shown` is printed. Loose matches (letters in
+order) and queries shorter than three characters never start anything.
 
 **Share and Discord.** With NIRUSHARE 0.4.0 or newer, the Share view lists
 every Discord webhook configured in `~/.config/nirushare/webhooks.toml` as

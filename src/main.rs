@@ -13,6 +13,7 @@ pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 mod app;
+mod best;
 mod calc;
 mod compose;
 mod config;
@@ -22,6 +23,7 @@ mod hints;
 mod input;
 mod intent;
 mod modes;
+mod overview;
 mod paste;
 mod providers;
 mod rank;
@@ -63,6 +65,23 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = args.first().map(String::as_str).unwrap_or("--apps");
+    // `--apps --query TEXT [--launch-best]` and `--note --stdin` take flags
+    // after the view; every other view is a single argument.
+    if arg == "--apps" && args.len() > 1 {
+        let result = match apps_query(&args[1..]) {
+            Ok((query, best)) => best::run(&query, best),
+            Err(e) => {
+                eprintln!("nirulauncher: {e}");
+                std::process::exit(2);
+            }
+        };
+        finish(result);
+        return;
+    }
+    if arg == "--note" && args.get(1).map(String::as_str) == Some("--stdin") && args.len() == 2 {
+        finish(modes::note::run_stdin());
+        return;
+    }
     let result = match arg {
         "--version" => {
             println!("NIRULAUNCHER {}", env!("CARGO_PKG_VERSION"));
@@ -149,15 +168,15 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
-        "--apps" | "--actions" | "--system-actions" | "--windows" | "--overview" | "--quick"
-        | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
-        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
-        | "--wired" | "--sound" | "--clip" | "--health" | "--agent" | "--share"
-        | "--share-pair" | "--emoji" | "--colors" | "--files" | "--manual" | "--note" => {
+        "--apps" | "--actions" | "--system-actions" | "--windows" | "--quick" | "--clipboard"
+        | "--microphone" | "--bluetooth" | "--tailscale" | "--displays" | "--power" | "--keys"
+        | "--settings" | "--themes" | "--timing" | "--input" | "--wifi" | "--wired" | "--sound"
+        | "--clip" | "--health" | "--agent" | "--share" | "--share-pair" | "--emoji"
+        | "--colors" | "--files" | "--manual" | "--note" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
-                "--windows" | "--overview" => "windows",
+                "--windows" => "windows",
                 "--quick" => "quick",
                 "--agent" => "agent",
                 "--share" => "share",
@@ -191,19 +210,47 @@ fn main() {
             }
         }
         "--hints" => Config::load().and_then(|cfg| hints::run(&cfg)),
+        "--overview" => Config::load().and_then(|cfg| overview::run(&cfg)),
         "--help" => {
-            println!(
-                "Usage: nirulauncher [--apps|--hints|--note|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
-            );
+            println!("{USAGE}");
             Ok(())
         }
         _ => {
-            eprintln!(
-                "Usage: nirulauncher [--apps|--hints|--note|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
-            );
+            eprintln!("{USAGE}");
             std::process::exit(2);
         }
     };
+    finish(result);
+}
+
+const USAGE: &str = "Usage: nirulauncher [--apps [--query TEXT [--launch-best]]|--hints|--overview|--note [--stdin]|--search [PHRASE]|--actions|--system-actions|--windows|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]";
+
+/// `--query TEXT` (or `--query=TEXT`) and `--launch-best`, in any order.
+fn apps_query(args: &[String]) -> std::result::Result<(String, bool), String> {
+    let mut query = None;
+    let mut best = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--launch-best" => best = true,
+            "--query" => {
+                i += 1;
+                query = Some(args.get(i).ok_or("--query needs the text")?.clone());
+            }
+            other => match other.strip_prefix("--query=") {
+                Some(text) => query = Some(text.to_string()),
+                None => return Err(format!("unknown option for --apps: {other}")),
+            },
+        }
+        i += 1;
+    }
+    match query {
+        Some(query) => Ok((query, best)),
+        None => Err("--launch-best needs --query TEXT".into()),
+    }
+}
+
+fn finish(result: Result<()>) {
     if let Err(e) = result {
         eprintln!("nirulauncher: {e}");
         std::process::exit(1);
@@ -224,4 +271,27 @@ fn run_ui(mut ui: Ui) -> Result<()> {
     }
     paster.linger();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn apps_query_flags() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            super::apps_query(&args(&["--query", "niru note", "--launch-best"])).unwrap(),
+            ("niru note".to_string(), true)
+        );
+        assert_eq!(
+            super::apps_query(&args(&["--launch-best", "--query=firefox"])).unwrap(),
+            ("firefox".to_string(), true)
+        );
+        assert_eq!(
+            super::apps_query(&args(&["--query", "gimp"])).unwrap(),
+            ("gimp".to_string(), false)
+        );
+        assert!(super::apps_query(&args(&["--launch-best"])).is_err());
+        assert!(super::apps_query(&args(&["--query"])).is_err());
+        assert!(super::apps_query(&args(&["--bogus"])).is_err());
+    }
 }
