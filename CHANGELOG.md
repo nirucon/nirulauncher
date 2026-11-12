@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0 (2026-11-12)
+
+- **Settings history in NIRU Actions** (`Super+A`, Appearance): *Undo the
+  last settings change* (asks first, runs `niructl config undo`), *Settings
+  history* and *Settings that differ from the defaults* (in a terminal that
+  stays open). Needs NIRUWM 0.25.0.
+- *Reset bar configuration* now only runs `nirubar --reset-config`, which
+  keeps the old file in the settings history and reloads the bars itself.
+- Tests that change `HOME` or the XDG folders share one lock, and the manual
+  tests use a folder each; they no longer fail now and then when run in
+  parallel.
+
 ## 0.11.0 (2026-11-10)
 
 - **Microphone inputs of a multichannel interface** in the Capture view

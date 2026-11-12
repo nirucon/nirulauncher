@@ -18,6 +18,7 @@ pub(crate) enum Action {
     UpdateShutdown,
     UpdateReboot,
     ResetBar,
+    UndoSettings,
     ForgetWifi(String),
 }
 

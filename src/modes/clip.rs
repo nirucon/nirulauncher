@@ -860,6 +860,7 @@ mod tests {
 
     #[test]
     fn choices_are_remembered_per_source() {
+        let _guard = crate::test_env_lock();
         let dir = std::env::temp_dir().join(format!("nirulauncher-inputs-{}", std::process::id()));
         std::env::set_var("XDG_STATE_HOME", &dir);
         assert!(!has_input_choices());

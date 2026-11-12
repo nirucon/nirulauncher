@@ -752,6 +752,7 @@ impl Ui {
                     Action::UpdateShutdown => "update and shut down",
                     Action::UpdateReboot => "update and restart",
                     Action::ResetBar => "reset the bar configuration",
+                    Action::UndoSettings => "undo the last settings change",
                     Action::ForgetWifi(_) => "forget this network",
                 }
             )
@@ -1609,10 +1610,15 @@ impl Ui {
                             "update-reboot".into(),
                             "--yes".into(),
                         ]],
-                        Action::ResetBar => vec![
-                            vec!["nirubar".into(), "--reset-config".into()],
-                            vec!["niructl".into(), "restart-bar".into()],
-                        ],
+                        // The reset keeps the old file in the settings
+                        // history and reloads the bars itself.
+                        Action::ResetBar => vec![vec!["nirubar".into(), "--reset-config".into()]],
+                        Action::UndoSettings => vec![vec![
+                            "niructl".into(),
+                            "config".into(),
+                            "undo".into(),
+                            "--yes".into(),
+                        ]],
                         Action::ForgetWifi(ssid) => {
                             self.confirm = None;
                             self.start_wifi_job(format!("Forgetting {ssid}…"), move || {

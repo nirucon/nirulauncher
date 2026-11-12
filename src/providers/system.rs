@@ -151,9 +151,7 @@ pub(crate) fn load_saved_actions() -> Vec<saved::SavedAction> {
 #[cfg(test)]
 mod nirux_update_tests {
     use crate::{installed_nirux_version, is_newer_version, nirux_update_available};
-    use std::sync::Mutex;
 
-    static LOCK: Mutex<()> = Mutex::new(());
 
     struct Sandbox {
         dir: std::path::PathBuf,
@@ -162,7 +160,7 @@ mod nirux_update_tests {
 
     impl Sandbox {
         fn new(name: &str) -> Self {
-            let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::test_env_lock();
             let dir = std::env::temp_dir().join(format!("nl-nux-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();

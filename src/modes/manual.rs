@@ -299,7 +299,10 @@ mod tests {
     }
 
     fn manual_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("nirulauncher-manual-{}", std::process::id()));
+        // Tests run in parallel in one process: each needs its own folder.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("nirulauncher-manual-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("README.md"), "# The NIRUX manual\n\n## Chapters\n").unwrap();

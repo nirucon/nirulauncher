@@ -1568,11 +1568,49 @@ pub(crate) fn action_tail_rows(cfg: &Config) -> Vec<Item> {
         key: "action:reset-bar".into(),
         group: "Appearance".into(),
         name: "Reset bar configuration…".into(),
-        detail: "Restore current NIRUBAR defaults; a backup is kept".into(),
-        keywords: String::new(),
+        detail: "Only [bar] goes back to the NIRUX defaults; Undo brings yours back".into(),
+        keywords: "settings default modules".into(),
         favorite: false,
         target: Target::Confirm(Action::ResetBar),
     });
+    items.push(Item {
+        key: "action:settings-undo".into(),
+        group: "Appearance".into(),
+        name: "Undo the last settings change…".into(),
+        detail: "config.toml back one working version; again goes further back".into(),
+        keywords: "settings config revert restore history".into(),
+        favorite: false,
+        target: Target::Confirm(Action::UndoSettings),
+    });
+    for (key, name, detail, args) in [
+        (
+            "action:settings-history",
+            "Settings history",
+            "Every working version of config.toml and what changed",
+            ["config", "history"],
+        ),
+        (
+            "action:settings-diff",
+            "Settings that differ from the defaults",
+            "Only the values you have changed or added",
+            ["config", "diff"],
+        ),
+    ] {
+        items.push(Item {
+            key: key.into(),
+            group: "Appearance".into(),
+            name: name.into(),
+            detail: detail.into(),
+            keywords: "settings config changes".into(),
+            favorite: false,
+            target: Target::Terminal {
+                argv: std::iter::once("niructl".to_string())
+                    .chain(args.iter().map(|s| s.to_string()))
+                    .collect(),
+                hold: true,
+            },
+        });
+    }
     for (name, detail, action) in [
         ("Log out…", "Requires confirmation", Action::Logout),
         ("Reboot…", "Requires confirmation", Action::Reboot),
@@ -1808,8 +1846,7 @@ mod wallpaper_tests {
 
     /// The environment is process-wide, so these tests run one at a time.
     fn lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        crate::test_env_lock()
     }
 
     #[test]

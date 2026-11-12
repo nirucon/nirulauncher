@@ -4,6 +4,14 @@
 //! and no shell: applications are started from argv arrays parsed from their
 //! desktop entries.
 
+/// Tests that change HOME or the XDG folders hold this, wherever they live:
+/// the environment is shared by every test thread of the process.
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 mod app;
 mod calc;
 mod compose;
