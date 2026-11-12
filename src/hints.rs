@@ -237,6 +237,8 @@ pub(crate) fn run(cfg: &Config) -> Result<()> {
             Event::Expose(e) if e.count == 0 => {
                 if let Some(i) = boxes.iter().position(|(w, _)| *w == e.window) {
                     draw(&mut renderer, boxes[i].0, &boxes[i].1, &typed)?;
+                    // The event wait does not flush; without this the label stays empty.
+                    c.flush()?;
                 }
             }
             Event::MappingNotify(_) => keymap = Keymap::load(&c),

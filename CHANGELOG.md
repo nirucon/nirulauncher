@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1 (2026-11-12)
+
+- The window jump labels show their letters. The drawing was never sent to
+  the X server, so the labels stayed plain boxes.
+
 ## 0.13.0 (2026-11-12)
 
 - **Window jump** (`--hints`, Ctrl+Alt+W in NIRUWM 0.25.2): every visible
