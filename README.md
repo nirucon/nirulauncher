@@ -132,6 +132,8 @@ Each view can be opened directly:
 | `--share`, `--share-pair` | NIRUSHARE devices, inbox, pairing and Discord webhooks |
 | `--health` | Installed/running, session, audio, network, display and capture status |
 | `--agent` | Short OpenCode prompt, then a centred terminal |
+| `--hints` | Label every visible window; type a label to focus it (`[hints] style`: letters or numbers) |
+| `--note` | One-line quick note to the inbox file (`[note] file`), optionally also to Discord or a device through NIRUSHARE |
 
 Non-interactive helpers: `--list`, `--list-actions`, `--list-search`,
 `--wifi-status`, `--wifi-scan`, `--wired-status`, `--list-files QUERY`,

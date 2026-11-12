@@ -30,6 +30,10 @@ pub struct Config {
     pub search_aliases: Vec<(String, String)>,
     /// `[files]`: file search (`--files`, `/ query`).
     pub files: FilesConfig,
+    /// `[hints] style`: the labels of the window jump (`--hints`), `letters` or `numbers`.
+    pub hints_style: String,
+    /// `[note] file`: where a quick note (`--note`) is added.
+    pub note_file: String,
     pub palette: Palette,
 }
 
@@ -186,6 +190,8 @@ impl Default for Config {
             search_default: None,
             search_aliases: Vec::new(),
             files: FilesConfig::default(),
+            hints_style: "letters".into(),
+            note_file: "~/Notes/inbox.md".into(),
             palette: Palette::default(),
         }
     }
@@ -601,6 +607,26 @@ impl Config {
         cfg.search_default = default;
         cfg.search_aliases = aliases;
         cfg.files = files_from(v);
+        if let Some(style) = v
+            .get("hints")
+            .and_then(|t| t.get("style"))
+            .and_then(|x| x.as_str())
+        {
+            let style = style.trim().to_lowercase();
+            if style == "letters" || style == "numbers" {
+                cfg.hints_style = style;
+            }
+        }
+        if let Some(file) = v
+            .get("note")
+            .and_then(|t| t.get("file"))
+            .and_then(|x| x.as_str())
+        {
+            let file = file.trim();
+            if !file.is_empty() {
+                cfg.note_file = file.to_string();
+            }
+        }
         cfg.palette = suite_palette_from(&config_home());
         if let Some(appearance) = appearance_value(&config_home()) {
             if v.get("font_size").is_none() {

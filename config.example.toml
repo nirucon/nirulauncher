@@ -83,6 +83,14 @@ terminal = ["kitty"]
 # (backend = "auto"); "plocate", "locate", "fd" and "builtin" choose one.
 # Recently used files (~/.local/share/recently-used.xbel) come first.
 #
+# Window jump (Ctrl+Alt+W, nirulauncher --hints): "letters" or "numbers".
+# [hints]
+# style = "letters"
+
+# Quick note (Super+Shift+N, nirulauncher --note): the inbox file.
+# [note]
+# file = "~/Notes/inbox.md"
+
 # [files]
 # enabled = true
 # roots = ["~"]

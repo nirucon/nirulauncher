@@ -18,6 +18,7 @@ mod compose;
 mod config;
 mod desktop;
 mod emoji_font;
+mod hints;
 mod input;
 mod intent;
 mod modes;
@@ -152,7 +153,7 @@ fn main() {
         | "--clipboard" | "--microphone" | "--bluetooth" | "--tailscale" | "--displays"
         | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--wifi"
         | "--wired" | "--sound" | "--clip" | "--health" | "--agent" | "--share"
-        | "--share-pair" | "--emoji" | "--colors" | "--files" | "--manual" => {
+        | "--share-pair" | "--emoji" | "--colors" | "--files" | "--manual" | "--note" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -181,6 +182,7 @@ fn main() {
                 "--colors" => "colors",
                 "--files" => "files",
                 "--manual" => "manual",
+                "--note" => "note",
                 _ => "apps",
             };
             match Ui::new(mode) {
@@ -188,15 +190,16 @@ fn main() {
                 Err(e) => Err(e),
             }
         }
+        "--hints" => Config::load().and_then(|cfg| hints::run(&cfg)),
         "--help" => {
             println!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
+                "Usage: nirulauncher [--apps|--hints|--note|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
             );
             Ok(())
         }
         _ => {
             eprintln!(
-                "Usage: nirulauncher [--apps|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
+                "Usage: nirulauncher [--apps|--hints|--note|--search [PHRASE]|--actions|--system-actions|--windows|--overview|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--tailscale|--displays|--power|--sound|--clip|--health|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]"
             );
             std::process::exit(2);
         }

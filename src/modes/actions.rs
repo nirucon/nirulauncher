@@ -280,6 +280,11 @@ pub(crate) const DISCORD_MODE: &str = "share-discord:";
 /// Configured webhook names, from `nirushare discord list --json` (names
 /// only; NIRUSHARE never prints webhook URLs). Older NIRUSHARE versions
 /// without the command give an empty list.
+/// The webhook names for other views (the quick note).
+pub(crate) fn discord_webhook_names() -> Vec<String> {
+    discord_webhooks()
+}
+
 fn discord_webhooks() -> Vec<String> {
     providers::output("nirushare", &["discord", "list", "--json"])
         .ok()
@@ -764,8 +769,73 @@ pub(crate) fn switch_items(c: &RustConnection, root: Window, quick: bool) -> Vec
 }
 
 /// Quick Settings with the switch rows after the idle toggle.
+/// The battery charge limit (`niructl battery`, NIRUWM 0.25.2): what it is,
+/// and charging to 100 % once. Nothing on a machine without a battery.
+pub(crate) fn battery_items() -> Vec<Item> {
+    let status = providers::output("niructl", &["battery", "status", "--json"])
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok());
+    let Some(status) = status else {
+        return Vec::new();
+    };
+    let batteries = status["batteries"].as_array().cloned().unwrap_or_default();
+    if batteries.is_empty() {
+        return Vec::new();
+    }
+    let configured = status["configured"].as_u64().unwrap_or(80);
+    let full_once = status["full_once"].as_bool().unwrap_or(false);
+    let supported = batteries
+        .iter()
+        .any(|b| b["supported"].as_bool() == Some(true));
+    let writable = batteries
+        .iter()
+        .any(|b| b["writable"].as_bool() == Some(true));
+    let row = |key: &str, name: String, detail: &str, target: Target| Item {
+        key: key.into(),
+        group: "Quick Settings".into(),
+        name,
+        detail: detail.into(),
+        keywords: "battery charge limit laptop power".into(),
+        favorite: false,
+        target,
+    };
+    if !supported {
+        return vec![row(
+            "quick:battery",
+            "Battery charge limit: not supported".into(),
+            "This laptop has no charge limit in Linux",
+            Target::Info,
+        )];
+    }
+    if !writable {
+        return vec![row(
+            "quick:battery",
+            format!("Battery charge limit: {configured} %, not active"),
+            "Run nirux update, then log in again",
+            Target::Info,
+        )];
+    }
+    if full_once {
+        vec![row(
+            "quick:battery-limit",
+            format!("Back to the {configured} % charge limit"),
+            "Charging to 100 % once is on until the next login",
+            spawn_niructl(&["battery", "limit"]),
+        )]
+    } else {
+        vec![row(
+            "quick:battery-full",
+            "Charge to 100 % once".into(),
+            &format!("The battery stops at {configured} %; back at the next login"),
+            spawn_niructl(&["battery", "full"]),
+        )]
+    }
+}
+
 pub(crate) fn quick_items_with(switches: Vec<Item>) -> Vec<Item> {
     let mut items = quick_items();
+    items.extend(battery_items());
     let at = items
         .iter()
         .position(|item| item.key == "quick:idle")
@@ -979,7 +1049,7 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
         ),
         I::NightLight => (
             "Night light",
-            "Toggle the manual night light · niructl nightlight toggle",
+            "On or off until the next sunset or sunrise · niructl nightlight toggle",
             spawn_niructl(&["nightlight", "toggle"]),
         ),
         I::Compositor => (

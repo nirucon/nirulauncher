@@ -450,6 +450,8 @@ impl Ui {
             "Confirm"
         } else if self.mode == "agent" {
             "Ask OpenCode"
+        } else if self.mode == "note" {
+            "Quick note"
         } else if self.mode == "keys" {
             "Keybindings"
         } else if self.mode == "emoji" {
@@ -537,6 +539,8 @@ impl Ui {
         } else if self.query.is_empty() {
             if self.mode == "agent" {
                 "Type a short prompt…".to_string()
+            } else if self.mode == "note" {
+                "Type a note…".to_string()
             } else if let Some(hint) = mode_hint(&self.mode, self.web_mode, self.cfg.files.enabled)
             {
                 format!("{title} · {hint}")
@@ -649,7 +653,7 @@ impl Ui {
             let typed = self
                 .files_query()
                 .unwrap_or_else(|| self.query.trim().to_string());
-            if !typed.is_empty() && !self.web_mode && self.mode != "agent" {
+            if !typed.is_empty() && !self.web_mode && self.mode != "agent" && self.mode != "note" {
                 let found = highlight(item, &typed);
                 let shown_label = if name_only {
                     item.name.clone()
@@ -781,6 +785,8 @@ impl Ui {
             busy.clone()
         } else if self.mode == "agent" {
             "Type a prompt · Enter starts OpenCode · Esc closes".to_string()
+        } else if self.mode == "note" {
+            "Type a note · ↑↓ also send it · Enter saves · Esc closes".to_string()
         } else if self.mode == "share-pair" {
             "Type: host token · Enter pairs · Esc closes".to_string()
         } else if self.mode == "wifi" {
@@ -1188,6 +1194,12 @@ impl Ui {
             self.refresh_sound_items();
             return;
         }
+        // The text is the note, not a filter: every destination stays listed.
+        if self.mode == "note" {
+            self.filtered = (0..self.items.len()).collect();
+            self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+            return;
+        }
         if self.web_mode {
             let previous = self
                 .filtered
@@ -1349,6 +1361,7 @@ impl Ui {
             && !matches!(
                 self.mode.as_str(),
                 "agent"
+                    | "note"
                     | "share-pair"
                     | "wifi"
                     | "wired"
@@ -1747,6 +1760,31 @@ impl Ui {
                     Ok(true)
                 }
             };
+        } else if self.mode == "note" {
+            let text = self.query.trim().to_string();
+            if text.is_empty() {
+                self.error = "Type a note first".into();
+                self.draw()?;
+                return Ok(true);
+            }
+            let key = self
+                .filtered
+                .get(self.selected)
+                .map(|&i| self.items[i].key.clone())
+                .unwrap_or_else(|| modes::note::NOTE_LOCAL.to_string());
+            if let Err(e) = modes::note::save_note(&self.cfg, &text) {
+                self.error = format!("The note could not be saved: {e}");
+                self.draw()?;
+                return Ok(true);
+            }
+            if let Some(argv) = modes::note::note_share_argv(&key) {
+                if let Err(e) = modes::note::share_note(&argv, &text) {
+                    self.error = format!("Saved, but NIRUSHARE did not start: {e}");
+                    self.draw()?;
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
         } else if self.mode == "agent" {
             let prompt = self.query.trim().to_string();
             if prompt.is_empty() {
@@ -2192,7 +2230,7 @@ pub(crate) fn mode_hint(mode: &str, web: bool, files: bool) -> Option<&'static s
         "system-actions" => "type an action or 2+2",
         "windows" => "type a window title",
         "sound" => "type to filter devices and event sounds",
-        "share-pair" | "wifi" | "wired" | "agent" => return None,
+        "share-pair" | "wifi" | "wired" | "agent" | "note" => return None,
         _ => "type to filter",
     })
 }

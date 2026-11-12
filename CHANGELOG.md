@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.0 (2026-11-12)
+
+- **Window jump** (`--hints`, Ctrl+Alt+W in NIRUWM 0.25.2): every visible
+  window on every screen gets a label; typing it focuses that window and
+  moves the pointer there. Letters (home row first) or numbers with
+  `[hints] style`. Labels never share a prefix, so there is no waiting.
+- **Quick note** (`--note`, Super+Shift+N): one line, added to the inbox
+  file (`[note] file`, `~/Notes/inbox.md`) with the time. The rows below
+  choose whether it also goes to a Discord webhook or a trusted device
+  through NIRUSHARE.
+- **Quick Settings: battery charge limit.** *Charge to 100 % once* or *Back
+  to the charge limit*, or why this laptop has no limit (NIRUWM 0.25.2
+  `niructl battery`).
+
 ## 0.12.1 (2026-11-12)
 
 0.12.0 was tagged but not released (formatting check); 0.12.1 is the same with the code formatted.

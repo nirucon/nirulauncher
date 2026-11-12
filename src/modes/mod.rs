@@ -14,6 +14,7 @@ pub(crate) mod health;
 pub(crate) mod keys;
 pub(crate) mod manual;
 pub(crate) mod network;
+pub(crate) mod note;
 pub(crate) mod settings;
 pub(crate) mod web;
 
@@ -122,6 +123,10 @@ pub(crate) fn view_catalog(
         "microphone" => job(Box::new(microphone_items), Vec::new()),
         "bluetooth" => job(Box::new(bluetooth_items), Vec::new()),
         "agent" => ready(agent_items()),
+        "note" => job(
+            Box::new(note::note_share_items),
+            note::note_local_items(cfg),
+        ),
         "share" => job(Box::new(share_items), Vec::new()),
         "share-pair" => ready(share_pair_items()),
         m if m.starts_with(DISCORD_MODE) => {
