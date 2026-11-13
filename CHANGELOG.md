@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.0 (2026-11-14)
+
+- **Open NIRUIO** from the Sound view (`--sound`) and the actions view: the
+  new NIRUX sound tool with every output, input, program and camera, what
+  WirePlumber remembers, and a sound doctor. It opens as its own floating
+  window (`niruio --window`, also Super+Shift+A in NIRUWM). The row is there
+  even when PipeWire does not answer, because the doctor explains why.
+
 ## 0.14.0 (2026-11-12)
 
 - **Workspace overview** (`--overview`, Super+E in NIRUWM): one card

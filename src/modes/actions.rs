@@ -912,6 +912,15 @@ pub(crate) fn power_items() -> Vec<Item> {
     items
 }
 
+/// NIRUIO (sound, cameras, sound doctor) in its own floating window.
+pub(crate) fn niruio_window() -> Target {
+    Target::Spawn {
+        argv: vec!["niruio".into(), "--window".into()],
+        terminal: false,
+        path: None,
+    }
+}
+
 pub(crate) fn spawn_niructl(args: &[&str]) -> Target {
     Target::Spawn {
         argv: std::iter::once("niructl".to_string())
@@ -1162,6 +1171,12 @@ pub(crate) fn sound_action_items() -> Vec<Item> {
             "Test microphone…",
             "Record five seconds locally and show peak/RMS",
             Target::SoundTest(5),
+        ),
+        (
+            "sound:niruio",
+            "Open NIRUIO",
+            "Outputs, inputs, programs, cameras and the sound doctor · Super+Shift+A",
+            niruio_window(),
         ),
     ] {
         items.push(Item {

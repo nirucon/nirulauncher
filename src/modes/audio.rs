@@ -109,6 +109,21 @@ pub(crate) fn microphone_items() -> Vec<Item> {
     items
 }
 
+/// The full sound tool: every device, program, camera, remembered setting
+/// and the doctor that explains silence.
+pub(crate) fn niruio_item() -> Item {
+    Item {
+        key: "sound:niruio".into(),
+        group: "Audio".into(),
+        name: "Open NIRUIO".into(),
+        detail: "Outputs, inputs, programs, cameras, remembered settings and the sound doctor · Super+Shift+A"
+            .into(),
+        keywords: "sound audio niruio mixer doctor camera microphone silent muted".into(),
+        favorite: false,
+        target: crate::modes::actions::niruio_window(),
+    }
+}
+
 pub(crate) fn sound_info(name: &str, detail: &str) -> Item {
     let key = format!(
         "sound:info:{}",
@@ -140,15 +155,18 @@ pub(crate) fn sound_items(
         return vec![sound_info("Loading audio…", "Reading PipeWire state")];
     };
     if !snapshot.available {
-        return vec![sound_info(
-            "Audio unavailable",
-            snapshot
-                .reason
-                .as_deref()
-                .unwrap_or("PipeWire is not responding"),
-        )];
+        return vec![
+            sound_info(
+                "Audio unavailable",
+                snapshot
+                    .reason
+                    .as_deref()
+                    .unwrap_or("PipeWire is not responding"),
+            ),
+            niruio_item(),
+        ];
     }
-    let mut items = Vec::new();
+    let mut items = vec![niruio_item()];
     let output = snapshot.output.as_ref();
     items.push(sound_info(
         &format!(
