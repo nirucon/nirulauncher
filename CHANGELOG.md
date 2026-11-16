@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.0 (2026-11-16)
+
+- **Bar view** (`--bar`, also under NIRUX Settings): every bar module with
+  what it shows, the ones on the bar first and in their order. Enter turns a
+  module on or off and the selection stays on the row; Alt+Up and Alt+Down
+  move a module. Below them: position, icons, window title, date, time, tray,
+  panels, and a row that puts the NIRUX default list back. Each change goes
+  through NIRUBAR 0.29 (`nirubar --modules`, `--set`) into the configuration
+  file with its comments kept, and the bar reloads at once. Needs NIRUBAR 0.29.
+
 ## 0.15.0 (2026-11-14)
 
 - **Open NIRUIO** from the Sound view (`--sound`) and the actions view: the

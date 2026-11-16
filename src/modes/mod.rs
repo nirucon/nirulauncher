@@ -6,6 +6,7 @@ use crate::*;
 pub(crate) mod actions;
 pub(crate) mod apps;
 pub(crate) mod audio;
+pub(crate) mod bar;
 pub(crate) mod clip;
 pub(crate) mod colors;
 pub(crate) mod emoji;
@@ -50,6 +51,7 @@ pub(crate) fn pending_item(mode: &str) -> Item {
         "themes" => ("Appearance", "Loading themes…"),
         "timing" => ("Timing", "Loading idle and lock timing…"),
         "input" => ("Input", "Loading input devices…"),
+        "bar" => ("Bar", "Loading the bar…"),
         _ => ("", "Loading…"),
     };
     Item {
@@ -152,6 +154,7 @@ pub(crate) fn view_catalog(
         "themes" => job(Box::new(theme_items), Vec::new()),
         "timing" => job(Box::new(timing_items), Vec::new()),
         "input" => job(Box::new(input_items), Vec::new()),
+        "bar" => job(Box::new(bar::bar_items), Vec::new()),
         "sound" => ready(sound_items(None, None, Some("Loading audio…"))),
         "health" => job(Box::new(health_provider_items), health_static_items()),
         _ => job(Box::new(saved_action_rows), app_items(desktop::discover())),

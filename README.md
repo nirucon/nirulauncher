@@ -128,8 +128,9 @@ Each view can be opened directly:
 | `--colors` | The last picked colors, and Pick color |
 | `--manual` | The NIRUX manual: chapters and headings, searchable |
 | `--files` | File search in the home folder, recent files first |
-| `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing |
+| `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing, bar |
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
+| `--bar` | The bar's modules and settings: Enter turns a module on or off, Alt+Up/Down moves it, and the rows below switch position, icons, window title, date, time, tray and panels. Changes go through `nirubar --modules` and `--set` into `~/.config/niruwm/config.toml` (comments kept), and the bar reloads at once |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
 | `--clip` | NIRUCLIP capture profiles, overlays, camera check and preview, MP4/GIF export and sharing, recovery and status, inputs of a multichannel interface |

@@ -170,9 +170,9 @@ fn main() {
         }
         "--apps" | "--actions" | "--system-actions" | "--windows" | "--quick" | "--clipboard"
         | "--microphone" | "--bluetooth" | "--tailscale" | "--displays" | "--power" | "--keys"
-        | "--settings" | "--themes" | "--timing" | "--input" | "--wifi" | "--wired" | "--sound"
-        | "--clip" | "--health" | "--agent" | "--share" | "--share-pair" | "--emoji"
-        | "--colors" | "--files" | "--manual" | "--note" => {
+        | "--settings" | "--themes" | "--timing" | "--input" | "--bar" | "--wifi" | "--wired"
+        | "--sound" | "--clip" | "--health" | "--agent" | "--share" | "--share-pair"
+        | "--emoji" | "--colors" | "--files" | "--manual" | "--note" => {
             let mode = match arg {
                 "--actions" => "actions",
                 "--system-actions" => "system-actions",
@@ -192,6 +192,7 @@ fn main() {
                 "--themes" => "themes",
                 "--timing" => "timing",
                 "--input" => "input",
+                "--bar" => "bar",
                 "--wifi" => "wifi",
                 "--wired" => "wired",
                 "--sound" => "sound",

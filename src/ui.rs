@@ -497,6 +497,8 @@ impl Ui {
             "Clipboard History"
         } else if self.items.iter().all(|item| item.group == "Tailscale") {
             "Tailscale"
+        } else if self.mode == "bar" {
+            "Bar"
         } else if self.mode == "wifi" {
             "Wi-Fi"
         } else if self.mode == "wired" {
@@ -823,6 +825,8 @@ impl Ui {
         } else if self.mode == "manual" {
             "Enter opens the manual at this heading · type to search headings and text · Esc close"
                 .to_string()
+        } else if self.mode == "bar" {
+            "Enter turns on or off · Alt+↑↓ moves a module · Esc close".to_string()
         } else if self.mode == "settings" {
             "Enter opens · Esc close · ↑↓ move".to_string()
         } else if self.mode == "themes" {
@@ -1553,6 +1557,11 @@ impl Ui {
                 return Ok(keep);
             }
         }
+        if self.mode == "bar" {
+            if let Some(keep) = self.bar_execute(key)? {
+                return Ok(keep);
+            }
+        }
         if let Some(path) = key.strip_prefix(crate::modes::files::KEY_PREFIX) {
             let result = if self.enter_shift {
                 copy_to_clipboard(path)
@@ -1998,6 +2007,13 @@ impl Ui {
                         }
                         continue;
                     }
+                    if self.mode == "bar"
+                        && e.state.contains(KeyButMask::MOD1)
+                        && matches!(key, 0xff52 | 0xff54)
+                    {
+                        self.bar_move(key == 0xff52)?;
+                        continue;
+                    }
                     if e.state.contains(KeyButMask::CONTROL) && key == 0x70 {
                         self.toggle_favorite()?;
                         continue;
@@ -2230,6 +2246,7 @@ pub(crate) fn mode_hint(mode: &str, web: bool, files: bool) -> Option<&'static s
         "system-actions" => "type an action or 2+2",
         "windows" => "type a window title",
         "sound" => "type to filter devices and event sounds",
+        "bar" => "type to filter modules",
         "share-pair" | "wifi" | "wired" | "agent" | "note" => return None,
         _ => "type to filter",
     })

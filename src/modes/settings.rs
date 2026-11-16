@@ -583,6 +583,15 @@ pub(crate) fn settings_items() -> Vec<Item> {
             target: mode("input"),
         },
         Item {
+            key: "settings:bar".into(),
+            group: "NIRUX Settings".into(),
+            name: "Bar".into(),
+            detail: "Modules on the bar, their order, position and clock".into(),
+            keywords: "settings bar panel modules arrange order position icons".into(),
+            favorite: false,
+            target: mode("bar"),
+        },
+        Item {
             key: "settings:timing".into(),
             group: "NIRUX Settings".into(),
             name: "Idle and lock timing".into(),
@@ -889,6 +898,7 @@ mod settings_tests {
             "settings:audio",
             "settings:keys",
             "settings:timing",
+            "settings:bar",
         ] {
             let item = items
                 .iter()
