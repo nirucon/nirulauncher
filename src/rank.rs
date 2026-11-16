@@ -393,7 +393,11 @@ pub(crate) fn ranked_for_mode(
             recent: 0..0,
         };
     }
-    if matches!(mode, "keys" | "emoji" | "colors" | "manual" | "bar") && query.trim().is_empty() {
+    if matches!(
+        mode,
+        "keys" | "emoji" | "colors" | "manual" | "bar" | "screensaver"
+    ) && query.trim().is_empty()
+    {
         // Grouped in NIRUWM's order, recents first, newest color first; the
         // bar's modules in the order they sit on the bar.
         return Ranked {

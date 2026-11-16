@@ -592,6 +592,15 @@ pub(crate) fn settings_items() -> Vec<Item> {
             target: mode("bar"),
         },
         Item {
+            key: "settings:screensaver".into(),
+            group: "NIRUX Settings".into(),
+            name: "Screensaver".into(),
+            detail: "Clock, photos, dark or dark with SID music, and shuffle".into(),
+            keywords: "settings screensaver saver scene photos slideshow dark sid shuffle".into(),
+            favorite: false,
+            target: mode("screensaver"),
+        },
+        Item {
             key: "settings:timing".into(),
             group: "NIRUX Settings".into(),
             name: "Idle and lock timing".into(),
@@ -899,6 +908,7 @@ mod settings_tests {
             "settings:keys",
             "settings:timing",
             "settings:bar",
+            "settings:screensaver",
         ] {
             let item = items
                 .iter()

@@ -131,6 +131,7 @@ Each view can be opened directly:
 | `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing, bar |
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
 | `--bar` | The bar's modules and settings: Enter turns a module on or off, Alt+Up/Down moves it, and the rows below switch position, icons, window title, date, time, tray and panels. Changes go through `nirubar --modules` and `--set` into `~/.config/niruwm/config.toml` (comments kept), and the bar reloads at once |
+| `--screensaver` | The screensaver's scenes: the chosen one first with a Preview row, then the others (Enter chooses one). Rows below choose which scenes shuffle may pick and step through the clock layout, clock panel, track line, seconds per photo and reduced motion. Changes go through `niruscreensaver --set` and `--shuffle` into `~/.config/niruui/screensaver.toml` (comments kept) |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
 | `--clip` | NIRUCLIP capture profiles, overlays, camera check and preview, MP4/GIF export and sharing, recovery and status, inputs of a multichannel interface |

@@ -16,6 +16,7 @@ pub(crate) mod keys;
 pub(crate) mod manual;
 pub(crate) mod network;
 pub(crate) mod note;
+pub(crate) mod screensaver;
 pub(crate) mod settings;
 pub(crate) mod web;
 
@@ -52,6 +53,7 @@ pub(crate) fn pending_item(mode: &str) -> Item {
         "timing" => ("Timing", "Loading idle and lock timing…"),
         "input" => ("Input", "Loading input devices…"),
         "bar" => ("Bar", "Loading the bar…"),
+        "screensaver" => ("Screensaver", "Loading the screensaver…"),
         _ => ("", "Loading…"),
     };
     Item {
@@ -155,6 +157,7 @@ pub(crate) fn view_catalog(
         "timing" => job(Box::new(timing_items), Vec::new()),
         "input" => job(Box::new(input_items), Vec::new()),
         "bar" => job(Box::new(bar::bar_items), Vec::new()),
+        "screensaver" => job(Box::new(screensaver::screensaver_items), Vec::new()),
         "sound" => ready(sound_items(None, None, Some("Loading audio…"))),
         "health" => job(Box::new(health_provider_items), health_static_items()),
         _ => job(Box::new(saved_action_rows), app_items(desktop::discover())),

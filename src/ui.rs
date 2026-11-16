@@ -499,6 +499,8 @@ impl Ui {
             "Tailscale"
         } else if self.mode == "bar" {
             "Bar"
+        } else if self.mode == "screensaver" {
+            "Screensaver"
         } else if self.mode == "wifi" {
             "Wi-Fi"
         } else if self.mode == "wired" {
@@ -827,6 +829,8 @@ impl Ui {
                 .to_string()
         } else if self.mode == "bar" {
             "Enter turns on or off · Alt+↑↓ moves a module · Esc close".to_string()
+        } else if self.mode == "screensaver" {
+            "Enter chooses, toggles or steps · Esc close".to_string()
         } else if self.mode == "settings" {
             "Enter opens · Esc close · ↑↓ move".to_string()
         } else if self.mode == "themes" {
@@ -1562,6 +1566,11 @@ impl Ui {
                 return Ok(keep);
             }
         }
+        if self.mode == "screensaver" {
+            if let Some(keep) = self.screensaver_execute(key)? {
+                return Ok(keep);
+            }
+        }
         if let Some(path) = key.strip_prefix(crate::modes::files::KEY_PREFIX) {
             let result = if self.enter_shift {
                 copy_to_clipboard(path)
@@ -2247,6 +2256,7 @@ pub(crate) fn mode_hint(mode: &str, web: bool, files: bool) -> Option<&'static s
         "windows" => "type a window title",
         "sound" => "type to filter devices and event sounds",
         "bar" => "type to filter modules",
+        "screensaver" => "type to filter scenes and settings",
         "share-pair" | "wifi" | "wired" | "agent" | "note" => return None,
         _ => "type to filter",
     })

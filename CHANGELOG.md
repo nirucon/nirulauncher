@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.0 (2026-11-16)
+
+- **Screensaver view** (`--screensaver`, also under NIRUX Settings): the
+  scenes of NIRUSCREENSAVER 0.16 (clock, photos, dark, dark-sid and
+  shuffle) with what each shows, the chosen one first with a Preview row
+  that shows it on this monitor. Enter on another scene chooses it. Below:
+  which scenes shuffle may pick, the clock layout and panel, the track line,
+  seconds per photo, reduced motion and the photo folder. Each change goes
+  through `niruscreensaver --set` and `--shuffle` into
+  `~/.config/niruui/screensaver.toml` with its comments kept. Needs
+  NIRUSCREENSAVER 0.16.
+
 ## 0.16.0 (2026-11-16)
 
 - **Bar view** (`--bar`, also under NIRUX Settings): every bar module with
