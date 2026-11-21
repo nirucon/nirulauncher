@@ -37,6 +37,8 @@ pub enum IntentAction {
     Manual,
     WifiOn,
     WifiOff,
+    Demo,
+    Demos,
 }
 
 impl IntentAction {
@@ -66,6 +68,8 @@ impl IntentAction {
             Self::Manual => "manual",
             Self::WifiOn => "wifi-on",
             Self::WifiOff => "wifi-off",
+            Self::Demo => "demo",
+            Self::Demos => "demos",
         }
     }
 }
@@ -327,6 +331,33 @@ const CATALOGUE: &[Entry] = &[
             "wifi av",
         ],
     },
+    // Swedish uses the same words; "demon" is left out (the demon).
+    Entry {
+        action: IntentAction::Demo,
+        phrases: &[
+            "demo",
+            "nirudemo",
+            "play demo",
+            "play a demo",
+            "spela demo",
+            "spela en demo",
+            "visa demo",
+            "visa en demo",
+        ],
+    },
+    Entry {
+        action: IntentAction::Demos,
+        phrases: &[
+            "demos",
+            "all demos",
+            "list demos",
+            "nirudemo list",
+            "demoer",
+            "alla demos",
+            "alla demoer",
+            "visa demos",
+        ],
+    },
 ];
 
 /// Lowercase, trim and collapse whitespace. Punctuation is treated as a word
@@ -437,6 +468,10 @@ mod tests {
             ("bring off-screen windows back", IntentAction::WindowsRescue),
             ("wifi on", IntentAction::WifiOn),
             ("wifi off", IntentAction::WifiOff),
+            ("demo", IntentAction::Demo),
+            ("nirudemo", IntentAction::Demo),
+            ("Play demo", IntentAction::Demo),
+            ("demos", IntentAction::Demos),
         ] {
             assert_eq!(action_for(query), Some(action), "{query}");
         }
@@ -468,6 +503,11 @@ mod tests {
             ("hämta tillbaka fönster", IntentAction::WindowsRescue),
             ("slå på wifi", IntentAction::WifiOn),
             ("stäng av wifi", IntentAction::WifiOff),
+            ("demo", IntentAction::Demo),
+            ("spela demo", IntentAction::Demo),
+            ("demos", IntentAction::Demos),
+            ("demoer", IntentAction::Demos),
+            ("visa demos", IntentAction::Demos),
         ] {
             assert_eq!(action_for(query), Some(action), "{query}");
         }

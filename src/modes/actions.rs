@@ -1081,6 +1081,16 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
             "Read the NIRUX manual · chapters and headings",
             Target::Mode("manual".into()),
         ),
+        I::Demo => (
+            "Play demo",
+            "A fullscreen NIRUX demo with music; any key ends it · nirudemo",
+            Target::Info,
+        ),
+        I::Demos => (
+            "Demos",
+            "Every NIRUDEMO demo with its length; Enter plays one",
+            Target::Mode("demos".into()),
+        ),
         I::WindowsRescue => (
             "Bring off-screen windows back",
             "Move managed windows onto a connected display · niructl windows rescue",
@@ -1127,7 +1137,20 @@ pub(crate) fn intent_item(found: &intent::IntentMatch, nmcli: bool) -> Item {
 
 pub(crate) fn intent_items(query: &str) -> Vec<Item> {
     let nmcli = in_path("nmcli");
-    intent::resolve(query)
+    let mut found = intent::resolve(query);
+    // "demos" opens the list, and also offers to play the default demo.
+    if found
+        .iter()
+        .any(|f| f.action == intent::IntentAction::Demos)
+        && !found.iter().any(|f| f.action == intent::IntentAction::Demo)
+    {
+        let phrase = found[0].phrase;
+        found.push(intent::IntentMatch {
+            action: intent::IntentAction::Demo,
+            phrase,
+        });
+    }
+    found
         .into_iter()
         .map(|found| intent_item(&found, nmcli))
         .collect()
@@ -1290,6 +1313,9 @@ pub(crate) fn picker_rows() -> Vec<Item> {
         crate::modes::colors::pick_item(),
         crate::modes::manual::action_item(),
     ]
+    .into_iter()
+    .chain(crate::modes::demos::action_items())
+    .collect()
 }
 
 pub(crate) fn action_command_rows() -> Vec<Item> {
@@ -2098,6 +2124,45 @@ mod intent_launcher_tests {
         let rows = super::action_command_rows();
         let action = rows.iter().find(|i| i.name == "Lock screen").unwrap();
         manual(&action.target, "actions");
+    }
+
+    #[test]
+    fn demo_words_offer_play_demo_and_the_demos_view() {
+        for query in ["demo", "Demo", "nirudemo", "spela demo", "play demo"] {
+            let rows = intent_items(query);
+            assert_eq!(rows.len(), 1, "{query}");
+            assert_eq!(rows[0].key, crate::modes::demos::PLAY_INTENT, "{query}");
+            assert_eq!(rows[0].name, "Play demo");
+            assert_eq!(
+                crate::modes::demos::play_argv(&rows[0].key).unwrap(),
+                ["nirudemo"]
+            );
+        }
+        for query in ["demos", "demoer", "alla demos"] {
+            let rows = intent_items(query);
+            let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+            assert_eq!(keys, ["intent:demos", "intent:demo"], "{query}");
+            assert!(matches!(&rows[0].target, Target::Mode(m) if m == "demos"));
+        }
+        for query in ["demon", "dem", "demo; reboot"] {
+            assert!(intent_items(query).is_empty(), "{query}");
+        }
+        // The NIRU Actions rows match the same words in ordinary search.
+        let rows = super::picker_rows();
+        let names = |query: &str| -> Vec<String> {
+            filtered_for_mode(&rows, query, &Default::default(), "actions")
+                .into_iter()
+                .map(|i| rows[i].name.clone())
+                .collect()
+        };
+        for query in ["demo", "demos", "nirudemo"] {
+            let found = names(query);
+            assert!(
+                found.contains(&"Play demo".to_string()),
+                "{query}: {found:?}"
+            );
+            assert!(found.contains(&"Demos".to_string()), "{query}: {found:?}");
+        }
     }
 
     #[test]

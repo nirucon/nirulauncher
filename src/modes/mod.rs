@@ -9,6 +9,7 @@ pub(crate) mod audio;
 pub(crate) mod bar;
 pub(crate) mod clip;
 pub(crate) mod colors;
+pub(crate) mod demos;
 pub(crate) mod emoji;
 pub(crate) mod files;
 pub(crate) mod health;
@@ -54,6 +55,7 @@ pub(crate) fn pending_item(mode: &str) -> Item {
         "input" => ("Input", "Loading input devices…"),
         "bar" => ("Bar", "Loading the bar…"),
         "screensaver" => ("Screensaver", "Loading the screensaver…"),
+        "demos" => ("Demos", "Loading the demos…"),
         _ => ("", "Loading…"),
     };
     Item {
@@ -158,6 +160,7 @@ pub(crate) fn view_catalog(
         "input" => job(Box::new(input_items), Vec::new()),
         "bar" => job(Box::new(bar::bar_items), Vec::new()),
         "screensaver" => job(Box::new(screensaver::screensaver_items), Vec::new()),
+        "demos" => job(Box::new(demos::demos_items), Vec::new()),
         "sound" => ready(sound_items(None, None, Some("Loading audio…"))),
         "health" => job(Box::new(health_provider_items), health_static_items()),
         _ => job(Box::new(saved_action_rows), app_items(desktop::discover())),

@@ -38,6 +38,10 @@ second, competing settings implementation.
   emoji, ©, ®, ™, arrows, °, ±, currency and typographic quotes, English and
   Swedish names, recents first, skin tones, pasted where you were typing.
 - Colors view: the last colors picked with `nirushot pick` (`Super+Ctrl+C`).
+- Demos (`--demos`, *Demos* in NIRU Actions and NIRUX Settings, or the word
+  `demos`): the fullscreen NIRUX demos of NIRUDEMO with title, length and
+  description; Enter plays one. The word `demo` (or `nirudemo`, `spela demo`)
+  offers *Play demo*, which plays the default demo.
 - Manual view (`--manual`, *Manual* in NIRU Actions, or the phrases `manual`,
   `help`, `hjälp`): the chapters and headings of the installed NIRUX manual,
   searchable by heading and by the text under it; Enter opens the chapter at
@@ -128,10 +132,11 @@ Each view can be opened directly:
 | `--colors` | The last picked colors, and Pick color |
 | `--manual` | The NIRUX manual: chapters and headings, searchable |
 | `--files` | File search in the home folder, recent files first |
-| `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing, bar |
+| `--settings` | NIRUX Settings: appearance, wallpaper, displays, audio, keys, timing, bar, screensaver, demos |
 | `--themes`, `--displays`, `--power`, `--timing`, `--input` | Single settings views |
 | `--bar` | The bar's modules and settings: Enter turns a module on or off, Alt+Up/Down moves it, and the rows below switch position, icons, window title, date, time, tray and panels. Changes go through `nirubar --modules` and `--set` into `~/.config/niruwm/config.toml` (comments kept), and the bar reloads at once |
 | `--screensaver` | The screensaver's scenes: the chosen one first with a Preview row, then the others (Enter chooses one). Rows below choose which scenes shuffle may pick and step through the clock layout, clock panel, track line, seconds per photo and reduced motion. Changes go through `niruscreensaver --set` and `--shuffle` into `~/.config/niruui/screensaver.toml` (comments kept) |
+| `--demos` | The NIRUDEMO demos read from `nirudemo --list` (title, length as m:ss, description); Enter plays the chosen one with `nirudemo NUMBER`. Without NIRUDEMO the view says it is not installed (run `nirux update`) |
 | `--wifi`, `--wired`, `--bluetooth`, `--tailscale` | Network and devices |
 | `--sound`, `--microphone` | Outputs, inputs, streams, event sounds, microphone test |
 | `--clip` | NIRUCLIP capture profiles, overlays, camera check and preview, MP4/GIF export and sharing, recovery and status, inputs of a multichannel interface |
@@ -229,6 +234,16 @@ size; the font is only read when the first emoji row is shown.
 **Colors.** `--colors` (or *Colors* in NIRU Actions) lists the last ten colors
 NIRUSHOT picked, newest first, with a swatch; Enter copies the hex value.
 *Pick color* runs `nirushot pick` (also `Super+Ctrl+C`).
+
+**Demos.** `--demos`, *Demos* in NIRU Actions or NIRUX Settings, or the word
+`demos` lists the demos NIRUDEMO has, read from `nirudemo --list` each time
+the view opens, so new demos appear without a launcher update. Each row shows
+the title, the length as m:ss and what the demo shows. Enter closes the
+launcher and runs `nirudemo NUMBER`; Escape or any key ends the demo. The
+word `demo` (also `nirudemo`, `play demo`, `spela demo`) offers *Play demo*,
+which runs `nirudemo` with its default demo. If NIRUDEMO is missing, fails or
+does not answer within 1.5 seconds, the view shows one row saying it is not
+installed; run `nirux update`.
 
 **Manual.** `Super+Shift+F1`, `--manual`, *Manual* in NIRU Actions, or the phrase `manual`,
 `help` or `hjälp` lists the chapters and their headings of the NIRUX manual

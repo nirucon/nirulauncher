@@ -395,7 +395,7 @@ pub(crate) fn ranked_for_mode(
     }
     if matches!(
         mode,
-        "keys" | "emoji" | "colors" | "manual" | "bar" | "screensaver"
+        "keys" | "emoji" | "colors" | "manual" | "bar" | "screensaver" | "demos"
     ) && query.trim().is_empty()
     {
         // Grouped in NIRUWM's order, recents first, newest color first; the

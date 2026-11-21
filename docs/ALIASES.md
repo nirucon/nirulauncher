@@ -28,6 +28,8 @@ to a fixed action in the launcher catalogue.
 | Restore windows | `bring off-screen windows back` | `hämta tillbaka fönster` |
 | Wi-Fi on | `wifi on` | `slå på wifi` |
 | Wi-Fi off | `wifi off` | `stäng av wifi` |
+| Play demo | `demo`, `nirudemo`, `play demo` | `demo`, `spela demo`, `visa demo` |
+| Demos view (and Play demo) | `demos`, `all demos`, `list demos` | `demos`, `demoer`, `alla demos`, `visa demos` |
 
 The implemented table is authoritative in `src/intent.rs`.
 

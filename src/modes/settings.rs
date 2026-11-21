@@ -595,10 +595,20 @@ pub(crate) fn settings_items() -> Vec<Item> {
             key: "settings:screensaver".into(),
             group: "NIRUX Settings".into(),
             name: "Screensaver".into(),
-            detail: "Clock, photos, dark or dark with SID music, and shuffle".into(),
-            keywords: "settings screensaver saver scene photos slideshow dark sid shuffle".into(),
+            detail: "Clock, photos, dark or dark with SID music, the demo, and shuffle".into(),
+            keywords: "settings screensaver saver scene photos slideshow dark sid demo shuffle"
+                .into(),
             favorite: false,
             target: mode("screensaver"),
+        },
+        Item {
+            key: "settings:demos".into(),
+            group: "NIRUX Settings".into(),
+            name: "Demos".into(),
+            detail: "The NIRUX demos with music; Enter plays one".into(),
+            keywords: "settings demos demo nirudemo demoscene".into(),
+            favorite: false,
+            target: mode("demos"),
         },
         Item {
             key: "settings:timing".into(),
@@ -909,6 +919,7 @@ mod settings_tests {
             "settings:timing",
             "settings:bar",
             "settings:screensaver",
+            "settings:demos",
         ] {
             let item = items
                 .iter()

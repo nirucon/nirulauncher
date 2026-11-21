@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.0 (2026-11-21)
+
+- **Demos view** (`--demos`, *Demos* in NIRU Actions and NIRUX Settings, or
+  the words `demos`, `demoer`, `alla demos`): the fullscreen demos of
+  NIRUDEMO, read from `nirudemo --list` with a 1.5 second limit, with title,
+  length (m:ss) and description. Enter closes the launcher and plays the
+  chosen demo with `nirudemo NUMBER`. New demos in NIRUDEMO show up without
+  a launcher release. When NIRUDEMO is missing or `--list` fails, one row
+  says it is not installed and points to `nirux update`.
+- **Play demo**: typing `demo`, `nirudemo`, `play demo` or `spela demo` (and
+  `demos`) offers *Play demo*, which runs `nirudemo` with its default demo.
+- The Screensaver view needs no change for NIRUSCREENSAVER's new `demo`
+  scene: its scenes come from `niruscreensaver --list`.
+
 ## 0.17.0 (2026-11-16)
 
 - **Screensaver view** (`--screensaver`, also under NIRUX Settings): the
