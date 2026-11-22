@@ -945,6 +945,67 @@ pub(crate) fn kind(name: &str, is_dir: bool) -> &'static str {
     }
 }
 
+/// The NIRUX icon (niruicons) for a file row, from its kind and name.
+pub(crate) fn icon(item: &Item) -> &'static str {
+    let path = item.key.strip_prefix(KEY_PREFIX).unwrap_or("");
+    let ext = item
+        .name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match item.group.as_str() {
+        "Folder" => folder_icon(path, &std::env::var("HOME").unwrap_or_default()),
+        "PDF" => "application-pdf",
+        "Document" | "Book" => "x-office-document",
+        "Spreadsheet" => "x-office-spreadsheet",
+        "Slides" => "x-office-presentation",
+        "Text" if ext == "md" => "text-markdown",
+        "Image" => "image-x-generic",
+        "Audio" => "audio-x-generic",
+        "Video" => "video-x-generic",
+        "Archive" => "package-x-generic",
+        "Code" if ext == "html" => "text-html",
+        "Code" => "text-x-script",
+        "Disk image" => "application-x-cd-image",
+        "Font" => "font-x-generic",
+        "Program" => "application-x-executable",
+        _ => match ext.as_str() {
+            "ics" => "x-office-calendar",
+            "db" | "sqlite" | "sqlite3" => "application-x-sqlite3",
+            _ => "text-x-generic",
+        },
+    }
+}
+
+/// Home and the usual folders in it have their own pictures.
+/// Search tools list folders with a trailing slash; that is ignored.
+fn folder_icon(path: &str, home: &str) -> &'static str {
+    let path = path.trim_end_matches('/');
+    let home = home.trim_end_matches('/');
+    if !home.is_empty() && path == home {
+        return "user-home";
+    }
+    let Some((parent, name)) = path.rsplit_once('/') else {
+        return "folder";
+    };
+    if home.is_empty() || parent != home {
+        return "folder";
+    }
+    match name {
+        "Desktop" => "user-desktop",
+        "Documents" => "folder-documents",
+        "Downloads" => "folder-download",
+        "Music" => "folder-music",
+        "Pictures" => "folder-pictures",
+        "Videos" => "folder-videos",
+        "Templates" => "folder-templates",
+        "Public" => "folder-publicshare",
+        "Nextcloud" => "folder-nextcloud",
+        "Git" | "Projects" => "folder-git",
+        _ => "folder",
+    }
+}
+
 /// The folder a path is in, as `~/a/b`, shortened from the left to `max`
 /// characters (`~/…/b/c`).
 pub(crate) fn short_parent(path: &str, home: Option<&Path>, max: usize) -> String {
@@ -1400,6 +1461,11 @@ mod tests {
         assert_eq!(row.label(), "PDF · faktura-åäö.pdf");
         assert_eq!(row.detail, "~/Fakturor");
         assert_eq!(row.key, "file:/home/u/Fakturor/faktura-åäö.pdf");
+        assert_eq!(icon(&row), "application-pdf");
+        assert_eq!(folder_icon("/home/u/Music/", "/home/u"), "folder-music");
+        assert_eq!(folder_icon("/home/u", "/home/u/"), "user-home");
+        assert_eq!(folder_icon("/home/u/a/Music", "/home/u"), "folder");
+        assert_eq!(folder_icon("/srv/Projects", ""), "folder");
         assert_eq!(item("/home/u/a", true, Some(&home)).group, "Folder");
         assert_eq!(item("/home/u/a.txt", false, Some(&home)).detail, "~");
         assert_eq!(item("/srv/a.txt", false, Some(&home)).detail, "/srv");

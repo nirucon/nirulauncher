@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.19.0 (2026-11-22)
+
+- **File search shows NIRUX icons.** Each row in file search starts with the
+  icon for its kind from NIRUICONS (folder, Home, Documents and the other
+  home folders, PDF, document, spreadsheet, slides, picture, audio, video,
+  archive, code, web page, font, disc image, calendar, database), in the
+  colours of the theme. They are the same icons as in NIRUFM. The icon
+  replaces the kind before the name; recent files keep their ↺ mark.
+
 ## 0.18.0 (2026-11-21)
 
 - **Demos view** (`--demos`, *Demos* in NIRU Actions and NIRUX Settings, or

@@ -542,12 +542,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "niruicons"
+version = "0.1.1"
+source = "git+https://github.com/nirucon/niruicons?tag=v0.1.1#e77a5d8ed045fb70bfd95811c09f6cdefd729aeb"
+
+[[package]]
 name = "nirulauncher"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "ab_glyph",
  "indexmap",
  "libc",
+ "niruicons",
  "png",
  "serde",
  "serde_json",

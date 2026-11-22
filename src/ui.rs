@@ -637,6 +637,11 @@ impl Ui {
                 format!("  {}", item.name)
             } else if self.mode == "manual" {
                 item.name.clone()
+            } else if matches!(icon, Some(Icon::Picture(_)))
+                && (self.query.trim().is_empty() || self.files_query().is_some())
+                && self.recent.contains(&(self.offset + line))
+            {
+                format!("{gap}{} {}", self.recent_mark, item.name)
             } else if icon.is_some() {
                 format!("{gap}{}", item.name)
             } else if item.favorite {
@@ -922,6 +927,28 @@ impl Ui {
                         self.cfg.palette.foreground,
                         bg,
                     )?,
+                }
+            }
+            Icon::Picture(name) => {
+                let pal = &self.cfg.palette;
+                let palette = niruicons::Palette {
+                    background: pal.background,
+                    foreground: pal.foreground,
+                    accent: pal.accent,
+                };
+                if let Some(icon) = niruicons::render(name, i32::from(size), &palette) {
+                    let pixels: Vec<u32> = icon
+                        .data
+                        .chunks_exact(4)
+                        .map(|p| {
+                            u32::from(p[3]) << 24
+                                | u32::from(p[0]) << 16
+                                | u32::from(p[1]) << 8
+                                | u32::from(p[2])
+                        })
+                        .collect();
+                    self.renderer
+                        .image(&self.c, self.gc, x, top, size, &pixels, bg)?;
                 }
             }
             Icon::Glyph(text) => {
@@ -2216,14 +2243,19 @@ impl Ui {
 }
 
 /// What a row shows before its name: an emoji bitmap, a symbol drawn with
-/// the text font, or a color swatch.
+/// the text font, a color swatch, or a NIRUX icon (files and folders, in the
+/// theme's colours).
 pub(crate) enum Icon {
     Emoji(String),
     Glyph(String),
     Swatch(u32),
+    Picture(&'static str),
 }
 
 pub(crate) fn row_icon(item: &Item, tone: u8) -> Option<Icon> {
+    if item.key.starts_with(crate::modes::files::KEY_PREFIX) {
+        return Some(Icon::Picture(crate::modes::files::icon(item)));
+    }
     if item.key.starts_with(emoji::KEY_PREFIX) {
         let chars = emoji::with_tone(&item.key, tone)?;
         return Some(if emoji::is_text_symbol(&item.key) {

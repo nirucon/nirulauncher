@@ -257,6 +257,9 @@ points to `nirux update`.
 followed by a name in the unified view (`Super+Shift+P`, also `Super+P` and
 `Super+A`): `/ faktura` or `/faktura 2024`.
 
+- Every row shows the NIRUX icon for its kind (NIRUICONS: folder, PDF,
+  document, picture, music, code and so on) in the theme's colours, the
+  same icons as in NIRUFM.
 - An empty field (or a lone `/`) lists recently used files
   (`~/.local/share/recently-used.xbel`), newest first, marked ↺. While
   typing, recent files that match come first, then the best matches.
