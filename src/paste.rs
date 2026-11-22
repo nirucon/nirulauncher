@@ -24,6 +24,7 @@ use x11rb::NONE;
 
 /// WM_CLASS names that paste with Ctrl+Shift+V.
 const TERMINALS: &[&str] = &[
+    "niruterm",
     "kitty",
     "alacritty",
     "foot",
@@ -721,6 +722,10 @@ mod tests {
     fn terminals_get_their_paste_key() {
         let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(paste_key(&c(&["kitty", "kitty"])), PasteKey::CtrlShiftV);
+        assert_eq!(
+            paste_key(&c(&["niruterm", "NIRUTERM"])),
+            PasteKey::CtrlShiftV
+        );
         assert_eq!(paste_key(&c(&["xterm", "XTerm"])), PasteKey::ShiftInsert);
         assert_eq!(paste_key(&c(&["Navigator", "firefox"])), PasteKey::CtrlV);
         assert_eq!(paste_key(&[]), PasteKey::CtrlV);

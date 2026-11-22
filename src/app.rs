@@ -197,7 +197,7 @@ pub(crate) fn spawn_command(
 }
 
 /// The terminal command for an agent prompt. The prompt is one argv element,
-/// never a shell fragment. Kitty and Alacritty use `--class`, Foot uses
+/// never a shell fragment. NIRUTERM, Kitty and Alacritty use `--class`, Foot uses
 /// `--app-id`; NIRUWM recognises `niru-agent` and centres it as a floating TUI.
 pub(crate) fn agent_command(prompt: &str, cfg: &Config) -> Vec<String> {
     let mut full = cfg.terminal.clone();
@@ -210,7 +210,7 @@ pub(crate) fn agent_command(prompt: &str, cfg: &Config) -> Vec<String> {
         .unwrap_or("")
         .to_ascii_lowercase();
     let class_flag = match terminal.as_str() {
-        "kitty" | "alacritty" | "wezterm" => Some("--class"),
+        "niruterm" | "kitty" | "alacritty" | "wezterm" => Some("--class"),
         "foot" => Some("--app-id"),
         "xterm" | "urxvt" | "rxvt" => Some("-class"),
         _ => None,
