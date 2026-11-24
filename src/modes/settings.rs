@@ -76,12 +76,27 @@ pub(crate) fn bluetooth_items() -> Vec<Item> {
             path: None,
         },
     });
+    if powered {
+        items.push(Item {
+            key: "bluetooth:pair".into(),
+            group: "Bluetooth".into(),
+            name: "Pair a new device…".into(),
+            detail: "Search nearby, then pair, trust and connect with Enter".into(),
+            keywords: "pair add new scan search headphones mouse keyboard speaker".into(),
+            favorite: false,
+            target: Target::Mode("bluetooth-pair".into()),
+        });
+    }
     if devices.is_empty() {
         items.push(bluetooth_info(
             "No paired devices",
-            "Pair devices with your Bluetooth manager first",
+            "Pair a new device above (Bluetooth must be on)",
         ));
     }
+    let forget: Vec<(String, String)> = devices
+        .iter()
+        .map(|(mac, name, _, _)| (mac.clone(), name.clone()))
+        .collect();
     for (mac, name, connected, battery) in devices {
         items.push(Item {
             key: format!("action:bluetooth:{mac}"),
@@ -109,6 +124,126 @@ pub(crate) fn bluetooth_items() -> Vec<Item> {
             },
         });
     }
+    for (mac, name) in forget {
+        items.push(Item {
+            key: format!("action:bluetooth:forget:{mac}"),
+            group: "Paired devices".into(),
+            name: format!("Forget: {name}"),
+            detail: "Remove the pairing; pair it again to use it".into(),
+            keywords: "forget remove unpair delete".into(),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec!["niructl".into(), "bluetooth".into(), "forget".into(), mac],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    items
+}
+
+/// What a BlueZ icon name says the device is.
+fn bluetooth_kind(icon: &str) -> &'static str {
+    match icon {
+        i if i.starts_with("audio-headset") || i.starts_with("audio-headphones") => "headphones",
+        i if i.starts_with("audio") => "speaker",
+        "input-mouse" => "mouse",
+        "input-keyboard" => "keyboard",
+        "input-gaming" => "game controller",
+        "input-tablet" => "tablet",
+        "phone" => "phone",
+        "computer" => "computer",
+        i if i.starts_with("camera") => "camera",
+        i if i.starts_with("printer") => "printer",
+        _ => "device",
+    }
+}
+
+fn signal(rssi: Option<i32>) -> &'static str {
+    match rssi {
+        Some(r) if r >= -60 => "strong signal",
+        Some(r) if r >= -75 => "good signal",
+        Some(_) => "weak signal, move closer",
+        None => "signal unknown",
+    }
+}
+
+/// Devices nearby that can be paired: `niructl bluetooth scan`, strongest
+/// first. Enter pairs, trusts (so it reconnects by itself) and connects.
+pub(crate) fn bluetooth_pair_items() -> Vec<Item> {
+    let again = || Item {
+        key: "bluetooth:pair:again".into(),
+        group: "Bluetooth".into(),
+        name: "Search again".into(),
+        detail: "Another 10 seconds".into(),
+        keywords: "scan search again".into(),
+        favorite: false,
+        target: Target::Mode("bluetooth-pair".into()),
+    };
+    let Some(output) = bounded_output(
+        "niructl",
+        &["bluetooth", "scan", "10"],
+        std::time::Duration::from_secs(20),
+    ) else {
+        return vec![
+            bluetooth_info(
+                "The search did not finish",
+                "niructl did not answer in time",
+            ),
+            again(),
+        ];
+    };
+    if !output.status.success() {
+        let why = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return vec![
+            bluetooth_info(
+                "Bluetooth cannot search",
+                if why.is_empty() {
+                    "Is there a Bluetooth adapter?"
+                } else {
+                    &why
+                },
+            ),
+            again(),
+        ];
+    }
+    let mut items = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 4 || f[0].is_empty() {
+            continue;
+        }
+        let rssi = f[3].parse::<i32>().ok();
+        items.push(Item {
+            key: format!("action:bluetooth:pair:{}", f[0]),
+            group: "Nearby".into(),
+            name: f[1].to_string(),
+            detail: format!(
+                "{} · {} · Enter pairs and connects",
+                bluetooth_kind(f[2]),
+                signal(rssi)
+            ),
+            keywords: format!("{} {}", bluetooth_kind(f[2]), f[0]),
+            favorite: false,
+            target: Target::Spawn {
+                argv: vec![
+                    "niructl".into(),
+                    "bluetooth".into(),
+                    "pair".into(),
+                    f[0].to_string(),
+                ],
+                terminal: false,
+                path: None,
+            },
+        });
+    }
+    if items.is_empty() {
+        items.push(bluetooth_info(
+            "No devices found",
+            "Put the device in pairing mode (often: hold its power or Bluetooth button), then search again",
+        ));
+    }
+    items.push(again());
     items
 }
 

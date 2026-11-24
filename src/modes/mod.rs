@@ -43,6 +43,10 @@ pub(crate) fn pending_item(mode: &str) -> Item {
         m if m.starts_with(CLIP_INPUTS_MODE) => ("Inputs", "Loading inputs…"),
         "microphone" => ("Audio", "Loading microphones…"),
         "bluetooth" => ("Bluetooth", "Loading Bluetooth…"),
+        "bluetooth-pair" => (
+            "Pair a device",
+            "Searching for Bluetooth devices nearby (10 s): put the device in pairing mode…",
+        ),
         "share" => ("NIRU Share", "Loading NIRU Share…"),
         m if m.starts_with(DISCORD_MODE) => ("Discord", "Preparing the preview…"),
         "tailscale" => ("Tailscale", "Loading Tailscale peers…"),
@@ -128,6 +132,7 @@ pub(crate) fn view_catalog(
         }
         "microphone" => job(Box::new(microphone_items), Vec::new()),
         "bluetooth" => job(Box::new(bluetooth_items), Vec::new()),
+        "bluetooth-pair" => job(Box::new(bluetooth_pair_items), Vec::new()),
         "agent" => ready(agent_items()),
         "note" => job(
             Box::new(note::note_share_items),
