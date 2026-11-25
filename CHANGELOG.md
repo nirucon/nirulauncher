@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.3 (2026-11-25)
+
+- NIRUPANEL: a click on the SYSTEM card opens NIRUSYS, the NIRUX system
+  monitor extra, when it is installed (otherwise the health report as
+  before).
+
 ## 0.22.2 (2026-11-25)
 
 - The same as 0.22.0, which GitHub failed to publish (0.22.1 was tagged

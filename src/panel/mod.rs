@@ -1916,6 +1916,8 @@ impl Panel {
             }
             Hit::OpenPlayer => self.spawn(&["niruamp"]),
             Hit::Today => self.spawn(&["nirutoday"]),
+            // NIRUSYS, the NIRUX system monitor extra, when it is installed.
+            Hit::System if data::on_path("nirusys") => self.spawn(&["nirusys"]),
             Hit::System => self.spawn(&["nirulauncher", "--health"]),
             Hit::Update => {
                 let argv = vec!["nirux".to_string(), "update".to_string()];
