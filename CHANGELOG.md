@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.1 (2026-11-25)
+
+- The same as 0.22.0, which GitHub failed to publish.
+
 ## 0.22.0 (2026-11-25)
 
 - **NIRUPANEL computers** (module `computers`): your Tailscale computers,
