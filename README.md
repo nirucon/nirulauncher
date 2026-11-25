@@ -20,6 +20,11 @@ second, competing settings implementation.
 
 ## Features
 
+- NIRUPANEL (`Super+Space`, `nirulauncher --panel`): a floating panel in
+  the middle of the screen with a retro logo, app search over icons, and
+  modules for today (weather and events from NIRUTODAY), the system, updates,
+  what plays in NIRUAMP, quick switches (do not disturb, night light, Wi-Fi,
+  Bluetooth) and power. Choose and order the modules in `[panel]`.
 - Application search with multi-word, keyword, diacritic-insensitive and
   conservative fuzzy matching, favourites, pins and launch-history ranking.
 - Window switcher and workspace-grouped overview.
@@ -95,6 +100,7 @@ Default NIRUWM keys:
 
 | Keys | View |
 |---|---|
+| `Super+Space` | NIRUPANEL |
 | `Super+P` | Applications |
 | `Super+Shift+P` (also `Super+Shift+B`, `Super+Shift+M`) | Applications, windows, actions and settings in one view |
 | `Super+A` | NIRU Actions |
@@ -311,6 +317,10 @@ label = "SearXNG (home)"
 url = "https://searx.example/search?q={query}"
 alias = "sx"
 
+[panel]                       # NIRUPANEL; both keys are optional
+modules = ["apps", "today", "system", "updates", "media", "toggles", "power"]
+app_rows = 2                  # rows of apps, 1 to 4
+
 [files]                       # file search; every key is optional
 enabled = true
 roots = ["~"]
@@ -320,6 +330,19 @@ show_hidden = false
 # locate_db = "~/.cache/files.db"  # plocate/locate -d: a database you built
 # exclude = [".cache", ".local/share/Trash", ".git", "node_modules", "target"]
 ```
+
+**NIRUPANEL.** `modules` lists what the panel shows, in order: `apps`
+(search and the apps you use most, with their icons), `today` (date, week,
+weather, warnings and today's events from `nirutoday --brief`), `system`
+(CPU, memory, disk, temperature, battery, uptime), `updates` (NIRUX and system
+packages, as NIRUBAR counted them), `media` (what NIRUAMP plays, with
+previous, play or pause and next), `toggles` and `power` (log out, restart and
+shut down ask once more). Type to search, Enter starts the chosen app, Tab and
+the arrows move, Esc clears the search or closes, and `Super+Space` again closes
+it. Everything is read locally; slow sources are read in the background, so
+the panel shows at once. Icons are drawn from the icon themes (PNG and SVG)
+once and kept in `~/.cache/nirulauncher/icons/`; an app without one gets a
+letter tile.
 
 `{query}` is replaced by the percent-encoded phrase; only `http` and `https`
 addresses are opened. `enabled = false` on a built-in id turns that engine off.

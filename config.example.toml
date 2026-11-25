@@ -105,3 +105,10 @@ terminal = ["kitty"]
 # exclude = [".cache", ".local/share/Trash", ".git", "node_modules", "target",
 #            "__pycache__", ".venv", ".mypy_cache", ".pytest_cache", ".tox",
 #            ".gradle", ".npm", ".cargo", ".rustup"]
+
+# NIRUPANEL (Super+Space, nirulauncher --panel): its modules, in order, out
+# of apps, today, system, updates, media, toggles and power, and the rows of
+# apps (1 to 4).
+# [panel]
+# modules = ["apps", "today", "system", "updates", "media", "toggles", "power"]
+# app_rows = 2

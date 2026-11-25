@@ -14,6 +14,8 @@ pub struct App {
     pub argv: Vec<String>,
     pub path: Option<PathBuf>,
     pub terminal: bool,
+    /// The desktop entry's `Icon`: a theme name or a path.
+    pub icon: String,
 }
 
 fn data_dirs() -> Vec<PathBuf> {
@@ -244,6 +246,7 @@ pub fn app_from_source(id: &str, text: &str, source: &Path) -> Option<App> {
         argv,
         path,
         terminal: bool_value(values.get("Terminal")),
+        icon: icon.to_string(),
     })
 }
 
@@ -432,6 +435,7 @@ mod tests {
             argv: vec!["true".into()],
             path: None,
             terminal: false,
+            icon: String::new(),
         };
         let apps = vec![mk("Terminal"), mk("Text Editor"), mk("Files")];
         let hits = matching(&apps, "te");

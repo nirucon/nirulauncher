@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.21.0 (2026-11-25)
+
+- **NIRUPANEL** (`Super+Space`, `nirulauncher --panel`): a floating panel in
+  the middle of the screen. A retro NIRUPANEL logo, the date, week and time,
+  and a search over the apps with their icons (PNG and SVG from the icon
+  themes, drawn once and cached; a letter tile when there is none). Modules,
+  chosen and ordered in `[panel] modules`: today (weather, warnings, name day
+  and today's events from NIRUTODAY), the system (CPU, memory, disk,
+  temperature, battery, uptime), updates (NIRUX and system packages, with
+  Update…), what NIRUAMP plays (previous, play or pause, next), quick
+  switches (do not disturb, night light, Wi-Fi, Bluetooth) and power (lock,
+  sleep, log out, restart, shut down; the last three ask once more). It opens
+  at once and reads slow sources in the background; `Super+Space` again
+  closes it. The launcher itself is unchanged.
+
 ## 0.19.0 (2026-11-22)
 
 - **File search shows NIRUX icons.** Each row in file search starts with the

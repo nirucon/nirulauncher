@@ -1,6 +1,6 @@
 [package]
 name = "nirulauncher"
-version = "0.20.0"
+version = "0.21.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -18,6 +18,9 @@ libc = "0.2"
 zbus = "4.4"
 ttf-parser = { version = "0.25", default-features = false, features = ["std", "opentype-layout"] }
 png = "0.17"
+# SVG application icons in the panel, rendered once and cached as PNG. No
+# text support: icons do not need fonts.
+resvg = { version = "0.45", default-features = false }
 niruicons = { git = "https://github.com/nirucon/niruicons", tag = "v0.1.1" }
 
 [profile.release]

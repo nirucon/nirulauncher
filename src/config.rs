@@ -35,6 +35,51 @@ pub struct Config {
     /// `[note] file`: where a quick note (`--note`) is added.
     pub note_file: String,
     pub palette: Palette,
+    pub panel: PanelConfig,
+}
+
+/// `[panel]`: NIRUPANEL's modules, in order, and rows of apps.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PanelConfig {
+    pub modules: Vec<String>,
+    pub app_rows: usize,
+}
+
+impl Default for PanelConfig {
+    fn default() -> Self {
+        Self {
+            modules: crate::panel::MODULES
+                .iter()
+                .map(|m| m.to_string())
+                .collect(),
+            app_rows: 2,
+        }
+    }
+}
+
+/// Read `[panel]`; unknown module names are left out, an empty list keeps
+/// the defaults.
+fn panel_from(v: &toml::Value) -> PanelConfig {
+    let mut panel = PanelConfig::default();
+    let Some(table) = v.get("panel") else {
+        return panel;
+    };
+    if let Some(list) = array(table, "modules") {
+        let mut modules: Vec<String> = Vec::new();
+        for m in list {
+            let m = m.trim().to_lowercase();
+            if crate::panel::MODULES.contains(&m.as_str()) && !modules.contains(&m) {
+                modules.push(m);
+            }
+        }
+        if !modules.is_empty() {
+            panel.modules = modules;
+        }
+    }
+    if let Some(n) = table.get("app_rows").and_then(|x| x.as_integer()) {
+        panel.app_rows = n.clamp(1, 4) as usize;
+    }
+    panel
 }
 
 /// `[files]`. Every key is optional; absent keys keep these defaults.
@@ -193,6 +238,7 @@ impl Default for Config {
             hints_style: "letters".into(),
             note_file: "~/Notes/inbox.md".into(),
             palette: Palette::default(),
+            panel: PanelConfig::default(),
         }
     }
 }
@@ -607,6 +653,7 @@ impl Config {
         cfg.search_default = default;
         cfg.search_aliases = aliases;
         cfg.files = files_from(v);
+        cfg.panel = panel_from(v);
         if let Some(style) = v
             .get("hints")
             .and_then(|t| t.get("style"))

@@ -24,6 +24,7 @@ mod input;
 mod intent;
 mod modes;
 mod overview;
+mod panel;
 mod paste;
 mod providers;
 mod rank;
@@ -214,6 +215,7 @@ fn main() {
                 Err(e) => Err(e),
             }
         }
+        "--panel" => panel::run(),
         "--hints" => Config::load().and_then(|cfg| hints::run(&cfg)),
         "--overview" => Config::load().and_then(|cfg| overview::run(&cfg)),
         "--help" => {
@@ -228,7 +230,7 @@ fn main() {
     finish(result);
 }
 
-const USAGE: &str = "Usage: nirulauncher [--apps [--query TEXT [--launch-best]]|--hints|--overview|--note [--stdin]|--search [PHRASE]|--actions|--system-actions|--windows|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--bluetooth-pair|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--bar|--screensaver|--demos|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]";
+const USAGE: &str = "Usage: nirulauncher [--apps [--query TEXT [--launch-best]]|--panel|--hints|--overview|--note [--stdin]|--search [PHRASE]|--actions|--system-actions|--windows|--quick|--agent|--share|--share-pair|--emoji|--colors|--files|--manual|--clipboard|--microphone|--bluetooth|--bluetooth-pair|--tailscale|--displays|--power|--keys|--settings|--themes|--timing|--input|--bar|--screensaver|--demos|--wifi|--wired|--sound|--clip|--health|--wifi-status|--wifi-scan|--wired-status|--check-config|--list|--list-actions|--list-search|--list-files [QUERY]|--version]";
 
 /// `--query TEXT` (or `--query=TEXT`) and `--launch-best`, in any order.
 fn apps_query(args: &[String]) -> std::result::Result<(String, bool), String> {
