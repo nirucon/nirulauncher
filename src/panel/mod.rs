@@ -1560,7 +1560,8 @@ mod tests {
     fn the_modules_come_from_the_config() {
         let cfg = |t: &str| Config::from_value(&t.parse::<toml::Value>().unwrap()).unwrap();
         assert_eq!(cfg("").panel.modules, MODULES);
-        let c = cfg("[panel]\nmodules = [\"power\", \"apps\", \"nonsense\", \"apps\"]\napp_rows = 9");
+        let c =
+            cfg("[panel]\nmodules = [\"power\", \"apps\", \"nonsense\", \"apps\"]\napp_rows = 9");
         assert_eq!(c.panel.modules, ["power", "apps"]);
         assert_eq!(c.panel.app_rows, 4);
         assert_eq!(cfg("[panel]\nmodules = []").panel.modules, MODULES);

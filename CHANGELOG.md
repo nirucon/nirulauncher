@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.21.0 (2026-11-25)
+## 0.21.1 (2026-11-25)
+
+The 0.21.0 tag was not released (its code was not formatted). Everything
+below ships in 0.21.1.
+
+## 0.21.0 (2026-11-25, not released)
 
 - **NIRUPANEL** (`Super+Space`, `nirulauncher --panel`): a floating panel in
   the middle of the screen. A retro NIRUPANEL logo, the date, week and time,
