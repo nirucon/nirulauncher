@@ -43,6 +43,13 @@ pub struct Config {
 pub struct PanelConfig {
     pub modules: Vec<String>,
     pub app_rows: usize,
+    /// `[panel.computers] hosts`: the computers to show, in order; empty
+    /// shows this one and the peers of the same Tailscale user.
+    pub computer_hosts: Vec<String>,
+    /// `[panel.computers] hide`: names never shown.
+    pub computer_hide: Vec<String>,
+    /// `[panel.computers] rows`: rows of computers, 1 to 4.
+    pub computer_rows: usize,
 }
 
 impl Default for PanelConfig {
@@ -53,6 +60,9 @@ impl Default for PanelConfig {
                 .map(|m| m.to_string())
                 .collect(),
             app_rows: 2,
+            computer_hosts: Vec::new(),
+            computer_hide: Vec::new(),
+            computer_rows: 2,
         }
     }
 }
@@ -78,6 +88,21 @@ fn panel_from(v: &toml::Value) -> PanelConfig {
     }
     if let Some(n) = table.get("app_rows").and_then(|x| x.as_integer()) {
         panel.app_rows = n.clamp(1, 4) as usize;
+    }
+    if let Some(c) = table.get("computers") {
+        let names = |key: &str| {
+            array(c, key)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .collect::<Vec<_>>()
+        };
+        panel.computer_hosts = names("hosts");
+        panel.computer_hide = names("hide");
+        if let Some(n) = c.get("rows").and_then(|x| x.as_integer()) {
+            panel.computer_rows = n.clamp(1, 4) as usize;
+        }
     }
     panel
 }

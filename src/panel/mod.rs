@@ -1,7 +1,8 @@
 //! NIRUPANEL: a floating panel in the middle of the screen (`Super+Space`,
 //! `nirulauncher --panel`). A retro logo, a search field over the apps with
 //! their icons, and modules: today, the system, updates, what plays, quick
-//! switches and power. Which modules show, and in which order, is
+//! switches, power and the computers in the tailnet; typing also finds the
+//! NIRUWM key bindings. Which modules show, and in which order, is
 //! `[panel] modules` in `~/.config/nirulauncher/config.toml`.
 //!
 //! It is the launcher's own process and its own parts (desktop entries,
@@ -10,20 +11,39 @@
 //! once and the modules fill in.
 mod data;
 mod icons;
+mod wrap;
 
 use crate::config::Config;
 use crate::render::Renderer;
+use crate::tailscale::Device;
 use crate::*;
 use data::Toggle;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
+use wrap::{fit, together, wrap};
 use x11rb::protocol::xproto::*;
 
-/// The modules there are, in their default order.
-pub(crate) const MODULES: [&str; 7] = [
-    "apps", "today", "system", "updates", "media", "toggles", "power",
+/// The modules there are, in their default order. `keys` is not drawn on
+/// its own: while the search finds key bindings they take the place of the
+/// cards and the computers.
+pub(crate) const MODULES: [&str; 9] = [
+    "apps",
+    "today",
+    "system",
+    "updates",
+    "media",
+    "computers",
+    "toggles",
+    "power",
+    "keys",
 ];
+
+/// The modules below the apps that found key bindings stand in for.
+const BODY: [&str; 5] = ["today", "system", "updates", "media", "computers"];
+
+/// The most key bindings one search keeps.
+const KEY_RESULTS: usize = 40;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Power {
@@ -78,6 +98,33 @@ enum Hit {
     Update,
     Today,
     System,
+    /// A computer of `computers`, by its place in the list shown.
+    Computer(usize),
+    /// A key binding, by its place in `keys`.
+    Key(usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ComputerAction {
+    /// `ssh NAME` in the NIRUX terminal.
+    Ssh,
+    /// `sftp://NAME/` in the file manager (`xdg-open`).
+    Files,
+    CopyIp,
+    CopyName,
+}
+
+/// Groups of targets that Up and Down move between.
+fn group_of(hit: Hit) -> u8 {
+    match hit {
+        Hit::App(_) => 0,
+        Hit::Previous | Hit::PlayPause | Hit::Next | Hit::OpenPlayer | Hit::Update => 1,
+        Hit::Today | Hit::System => 2,
+        Hit::Computer(_) => 3,
+        Hit::Key(_) => 4,
+        Hit::Toggle(_) => 5,
+        Hit::Power(_) => 6,
+    }
 }
 
 /// What the workers send back.
@@ -88,6 +135,8 @@ enum Msg {
     Toggle(Toggle, Option<bool>),
     Icon(String, Option<icons::Picture>),
     System(data::System),
+    Computers(std::result::Result<Vec<Device>, String>),
+    Keys(Vec<Item>),
 }
 
 struct Panel {
@@ -125,6 +174,23 @@ struct Panel {
     toggles: HashMap<Toggle, Option<bool>>,
     system: Option<data::System>,
     system_busy: bool,
+    /// The computers shown, once Tailscale has answered.
+    computers: Option<std::result::Result<Vec<Device>, String>>,
+    computer_rows: usize,
+    /// Computers in a row, as last drawn (for Up and Down).
+    computer_cols: usize,
+    /// NIRUWM's key bindings, read once on the first search.
+    keys: Option<Vec<Item>>,
+    keys_asked: bool,
+    /// The key bindings the search found, best first.
+    key_shown: Vec<usize>,
+    /// A key binding that ends the session or closes a window waits for a
+    /// second Enter.
+    confirm_key: Option<usize>,
+    /// The focus was moved by hand since the search last changed.
+    moved: bool,
+    /// `NIRUPANEL_DEBUG=hits`: every frame's targets on stderr, for tests.
+    debug_hits: bool,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     last_tick: Instant,
@@ -230,6 +296,129 @@ fn rect(x: i16, y: i16, w: i32, h: i32) -> Rectangle {
     }
 }
 
+/// The keys of a key binding row ("Super+T"), without its conflict mark.
+fn key_label(item: &Item) -> String {
+    item.detail.split(" · ").next().unwrap_or("").to_string()
+}
+
+/// A key binding that ends the session, sleeps or closes a window: Enter
+/// asks once more before it runs.
+fn risky_key(item: &Item) -> bool {
+    let what = crate::compose::fold(
+        &format!(
+            "{} {}",
+            item.name,
+            item.keywords
+                .split(crate::modes::keys::NOTE)
+                .next()
+                .unwrap_or("")
+        )
+        .to_lowercase(),
+    );
+    let words: Vec<&str> = what
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    const RISKY: [&str; 10] = [
+        "quit",
+        "logout",
+        "reboot",
+        "restart",
+        "shutdown",
+        "poweroff",
+        "suspend",
+        "hibernate",
+        "close",
+        "kill",
+    ];
+    words.iter().any(|w| RISKY.contains(w))
+        || what.contains("log out")
+        || what.contains("shut down")
+        || what.contains("power off")
+}
+
+/// What a computer is: (text, whether it is this computer).
+fn computer_detail(d: &Device, now: i64) -> (String, bool) {
+    let os = match d.os.as_str() {
+        "" => "?".to_string(),
+        "macOS" | "iOS" | "tvOS" => d.os.clone(),
+        other => {
+            let mut c = other.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    };
+    if d.this {
+        return (format!("this computer · {os}"), true);
+    }
+    let mut parts = vec![os];
+    if d.online {
+        parts.push("online".into());
+        match d.direct {
+            Some(true) => parts.push("direct".into()),
+            Some(false) if !d.relay.is_empty() => parts.push(format!("relay {}", d.relay)),
+            _ => {}
+        }
+        if d.exit_node {
+            parts.push("exit node".into());
+        }
+    } else {
+        parts.push("offline".into());
+        if let Some(t) = d.last_seen {
+            parts.push(format!("seen {}", crate::tailscale::ago(now, t)));
+        }
+    }
+    let parts: Vec<String> = parts.iter().map(|p| together(p)).collect();
+    (parts.join(" · "), false)
+}
+
+/// A host name or address from Tailscale that is safe to pass to `ssh` and
+/// put in a URI: letters, digits, `-`, `.`, `:` and `_`, not starting
+/// with `-` (an option).
+fn safe_host(host: &str) -> bool {
+    !host.is_empty()
+        && !host.starts_with('-')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ':' | '_'))
+}
+
+/// Where an arrow key moves the focus among targets in `groups` (one group
+/// id per target, in order). `cols(group)` is the width of a grid group
+/// (0: not a grid, Up and Down leave it).
+fn step_in(groups: &[u8], f: usize, sym: u32, cols: impl Fn(u8) -> usize) -> usize {
+    let n = groups.len();
+    if n == 0 {
+        return 0;
+    }
+    let g = groups[f];
+    let start = (0..f)
+        .rev()
+        .take_while(|&k| groups[k] == g)
+        .last()
+        .unwrap_or(f);
+    let end = (f..n).find(|&k| groups[k] != g).unwrap_or(n);
+    let c = cols(g);
+    match sym {
+        0xff51 => f.saturating_sub(1),
+        0xff53 => (f + 1).min(n - 1),
+        0xff52 if c > 0 && f - start >= c => f - c,
+        0xff52 if start > 0 => {
+            // The start of the group before.
+            let p = groups[start - 1];
+            (0..start)
+                .rev()
+                .take_while(|&k| groups[k] == p)
+                .last()
+                .unwrap_or(0)
+        }
+        0xff54 if c > 0 && f + c < end => f + c,
+        0xff54 if end < n => end,
+        _ => f,
+    }
+}
+
 impl Panel {
     fn open() -> Result<Self> {
         let cfg = Config::load()?;
@@ -255,13 +444,24 @@ impl Panel {
         let w = (i32::from(advance) * 128)
             .clamp(860, 1320)
             .min(i32::from(monitor.w) - i32::from(line) * 2) as u16;
-        let modules = cfg.panel.modules.clone();
+        let mut modules = cfg.panel.modules.clone();
+        // No Tailscale, no computers (and nothing is run to find out).
+        if modules.iter().any(|m| m == "computers") && !data::on_path("tailscale") {
+            modules.retain(|m| m != "computers");
+        }
         let mut app_rows = cfg.panel.app_rows;
-        // Tall enough for every module, shorter rows of apps on a small screen.
-        let mut h = Self::height_for(&modules, app_rows, line, advance, w);
-        while h > i32::from(monitor.h) - i32::from(line) * 2 && app_rows > 1 {
-            app_rows -= 1;
-            h = Self::height_for(&modules, app_rows, line, advance, w);
+        let mut computer_rows = cfg.panel.computer_rows;
+        // Tall enough for every module; on a small screen fewer rows of
+        // computers, then of apps.
+        let mut h = Self::height_for(&modules, app_rows, computer_rows, line, advance, w);
+        while h > i32::from(monitor.h) - i32::from(line) * 2 && (app_rows > 1 || computer_rows > 1)
+        {
+            if computer_rows > 1 {
+                computer_rows -= 1;
+            } else {
+                app_rows -= 1;
+            }
+            h = Self::height_for(&modules, app_rows, computer_rows, line, advance, w);
         }
         let h = h.min(i32::from(monitor.h) - 8).max(200) as u16;
         let x = monitor.x + (monitor.w as i16 - w as i16) / 2;
@@ -405,6 +605,15 @@ impl Panel {
             toggles: HashMap::new(),
             system: None,
             system_busy: false,
+            computers: None,
+            computer_rows,
+            computer_cols: 1,
+            keys: None,
+            keys_asked: false,
+            key_shown: Vec::new(),
+            confirm_key: None,
+            moved: false,
+            debug_hits: std::env::var_os("NIRUPANEL_DEBUG").is_some_and(|v| v == "hits"),
             tx,
             rx,
             last_tick: Instant::now(),
@@ -431,7 +640,14 @@ impl Panel {
         fit.min(cards).max(1)
     }
 
-    fn height_for(modules: &[String], app_rows: usize, line: i16, advance: i16, w: u16) -> i32 {
+    fn height_for(
+        modules: &[String],
+        app_rows: usize,
+        computer_rows: usize,
+        line: i16,
+        advance: i16,
+        w: u16,
+    ) -> i32 {
         let lh = i32::from(line);
         let pad = lh;
         let mut h = pad + Self::logo_height(lh) + pad / 2 + lh * 2 + pad;
@@ -439,15 +655,7 @@ impl Panel {
         if has("apps") {
             h += Self::tile_height(lh) * app_rows as i32 + pad;
         }
-        let cards = ["today", "system", "updates", "media"]
-            .iter()
-            .filter(|m| has(m))
-            .count();
-        if cards > 0 {
-            let cols = Self::card_columns(w, advance, cards);
-            let rows = cards.div_ceil(cols) as i32;
-            h += rows * (Self::card_height(lh) + pad / 2) + pad / 2;
-        }
+        h += Self::body_height(modules, computer_rows, line, advance, w);
         for m in ["toggles", "power"] {
             if has(m) {
                 h += lh * 2 + pad / 2;
@@ -456,17 +664,64 @@ impl Panel {
         h + lh + pad
     }
 
+    /// The height of the cards and the computers (or, while searching, of
+    /// the key bindings in their place).
+    fn body_height(
+        modules: &[String],
+        computer_rows: usize,
+        line: i16,
+        advance: i16,
+        w: u16,
+    ) -> i32 {
+        let lh = i32::from(line);
+        let gap = lh / 2;
+        let has = |m: &str| modules.iter().any(|x| x == m);
+        let mut h = 0;
+        let cards = ["today", "system", "updates", "media"]
+            .iter()
+            .filter(|m| has(m))
+            .count();
+        if cards > 0 {
+            let cols = Self::card_columns(w, advance, cards);
+            let rows = cards.div_ceil(cols) as i32;
+            h += rows * (Self::card_height(lh) + gap) + gap;
+        }
+        if has("computers") {
+            h += Self::computers_height(lh, computer_rows) + gap;
+        }
+        if h == 0 && has("keys") {
+            h = Self::keys_height(lh);
+        }
+        h
+    }
+
+    /// The room key bindings get when there is no card or computer.
+    fn keys_height(lh: i32) -> i32 {
+        lh * 9
+    }
+
+    /// One computer: its name and two lines about it.
+    fn cell_height(lh: i32) -> i32 {
+        (lh + 2) * 3 + 6
+    }
+
+    fn computers_height(lh: i32, rows: usize) -> i32 {
+        lh + 10 + rows as i32 * (Self::cell_height(lh) + 4) + 4
+    }
+
     fn logo_height(lh: i32) -> i32 {
         (lh / 5).max(2) * 7 + 6
     }
+    /// An app: its icon and its name on up to two lines.
     fn tile_height(lh: i32) -> i32 {
-        Self::icon_size(lh) + lh + lh / 2 + 8
+        Self::icon_size(lh) + lh * 2 + 16
     }
     fn icon_size(lh: i32) -> i32 {
         (lh * 2 + lh / 2).clamp(32, 64)
     }
+    /// A card: its title and six or seven lines of text.
     fn card_height(lh: i32) -> i32 {
-        lh * 6 + lh / 2
+        lh * 9 + lh / 2
     }
 
     fn start_workers(&mut self) {
@@ -487,6 +742,17 @@ impl Panel {
         }
         if self.has("system") {
             self.poll_system(Duration::from_millis(250));
+        }
+        if self.has("computers") {
+            let tx = self.tx.clone();
+            let (hosts, hide) = (
+                self.cfg.panel.computer_hosts.clone(),
+                self.cfg.panel.computer_hide.clone(),
+            );
+            std::thread::spawn(move || {
+                let list = data::computers().map(|all| crate::tailscale::pick(&all, &hosts, &hide));
+                let _ = tx.send(Msg::Computers(list));
+            });
         }
         if self.has("toggles") {
             for t in Toggle::ALL {
@@ -521,6 +787,44 @@ impl Panel {
         self.shown = order;
         self.focus = 0;
         self.confirm = None;
+        self.moved = false;
+        self.filter_keys();
+    }
+
+    /// The key bindings that match the search. The first search reads them
+    /// (`niructl keys --json`, on a worker); they are kept while the panel
+    /// is open.
+    fn filter_keys(&mut self) {
+        self.key_shown.clear();
+        self.confirm_key = None;
+        let q = self.query.trim().to_string();
+        if q.is_empty() || !self.has("keys") {
+            return;
+        }
+        match &self.keys {
+            Some(items) => {
+                let mut order = ranked_for_mode(items, &q, &self.usage, "keys").order;
+                order.truncate(KEY_RESULTS);
+                self.key_shown = order;
+            }
+            None if !self.keys_asked => {
+                self.keys_asked = true;
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    let items = crate::modes::keys::keys_items()
+                        .into_iter()
+                        .filter(|i| i.key != "shortcut:none")
+                        .collect();
+                    let _ = tx.send(Msg::Keys(items));
+                });
+            }
+            None => {}
+        }
+    }
+
+    /// Whether key bindings stand in for the cards and computers now.
+    fn showing_keys(&self) -> bool {
+        !self.key_shown.is_empty() && !self.query.trim().is_empty()
     }
 
     /// The icon of an app: `Some(true)` drawn, `Some(false)` none (a
@@ -670,10 +974,22 @@ impl Panel {
         Ok((r.x + 8, r.y + lh + 10))
     }
 
-    fn lines(&mut self, x: i16, y: i16, w: i32, lines: &[(String, u32)]) -> Result<()> {
+    /// Text on a card from `y` down to `bottom`: each entry wrapped to the
+    /// width on up to three lines, as many as the room holds (see
+    /// `wrap::fit`).
+    fn lines(
+        &mut self,
+        x: i16,
+        y: i16,
+        w: i32,
+        bottom: i16,
+        entries: &[(String, u32)],
+    ) -> Result<()> {
         let lh = self.r.line_height + 2;
         let bg = self.cfg.palette.surface;
-        for (i, (t, c)) in lines.iter().enumerate() {
+        let chars = (w / i32::from(self.r.advance).max(1)).max(1) as usize;
+        let budget = ((i32::from(bottom) - i32::from(y)) / i32::from(lh)).max(0) as usize;
+        for (i, (t, c)) in fit(entries, chars, budget, 3).iter().enumerate() {
             let b = self.baseline(y + i as i16 * lh, i32::from(lh));
             self.text(x, b, t, *c, bg, w)?;
         }
@@ -729,7 +1045,9 @@ impl Panel {
         )?;
         let b = self.baseline(field.y, i32::from(field.height));
         if self.query.is_empty() {
-            let hint = if self.has("apps") {
+            let hint = if self.has("apps") && self.has("keys") {
+                "Type to find an app or a key binding · Tab moves · Esc closes"
+            } else if self.has("apps") {
                 "Type to find an app · Tab moves · Esc closes"
             } else {
                 "Tab moves · Enter chooses · Esc closes"
@@ -756,13 +1074,47 @@ impl Panel {
         }
         y += lh * 2 + pad;
         let modules = self.modules.clone();
+        let keys = self.showing_keys();
+        let has_body = modules.iter().any(|m| BODY.contains(&m.as_str()));
+        let body = Self::body_height(
+            &modules,
+            self.computer_rows,
+            self.r.line_height,
+            self.r.advance,
+            self.w,
+        );
         let mut cards_done = false;
+        let mut body_done = false;
         for m in &modules {
             match m.as_str() {
                 "apps" => y = self.draw_apps(y, pad)?,
+                // Found key bindings take the place of the cards and the
+                // computers, at the first of them, in the same height.
+                b if keys && BODY.contains(&b) => {
+                    if !std::mem::replace(&mut body_done, true) {
+                        y = self.draw_keys(y, body, pad)?;
+                    }
+                }
                 "today" | "system" | "updates" | "media" if !cards_done => {
                     cards_done = true;
                     y = self.draw_cards(y, pad)?;
+                }
+                "computers" => y = self.draw_computers(y, pad)?,
+                "keys" if !has_body => {
+                    if keys {
+                        y = self.draw_keys(y, body, pad)?;
+                    } else {
+                        let b = self.baseline(y as i16, lh * 2);
+                        self.text(
+                            pad as i16,
+                            b,
+                            "Key bindings show here while you type.",
+                            pal.muted,
+                            pal.background,
+                            w - pad * 2,
+                        )?;
+                        y += body;
+                    }
                 }
                 "toggles" => y = self.draw_toggles(y, pad)?,
                 "power" => y = self.draw_power(y, pad)?,
@@ -770,8 +1122,19 @@ impl Panel {
             }
         }
         // The footer: a notice, or the keys.
+        let focused = self.targets.get(self.focus).copied();
         let footer = if !self.note.is_empty() {
             (self.note.clone(), pal.warning)
+        } else if let Some(k) = self.confirm_key {
+            let item = &self.keys.as_ref().map(|v| v[k].clone());
+            let what = item
+                .as_ref()
+                .map(|i| format!("{} ({})", i.name, key_label(i)))
+                .unwrap_or_default();
+            (
+                format!("{what}? Enter or a click again runs it, Esc cancels"),
+                pal.warning,
+            )
         } else if let Some(p) = self.confirm {
             (
                 format!(
@@ -779,6 +1142,31 @@ impl Panel {
                     p.label()
                 ),
                 pal.warning,
+            )
+        } else if let Some(Hit::Computer(i)) = self
+            .hover
+            .or(focused)
+            .filter(|h| matches!(h, Hit::Computer(_)))
+        {
+            let name = self.computer(i).map(|d| d.name.clone()).unwrap_or_default();
+            (
+                format!(
+                    "{name}: Enter or click ssh · Shift+Enter or middle-click files · Ctrl+C or right-click copy IP · Ctrl+Shift+C copy name"
+                ),
+                pal.muted,
+            )
+        } else if let Some(Hit::Key(i)) = focused {
+            let runs = self
+                .keys
+                .as_ref()
+                .is_some_and(|v| !matches!(v[i].target, Target::Info));
+            (
+                if runs {
+                    "Enter runs the key binding · Super+/ lists every key · Esc clears".into()
+                } else {
+                    "Shown only: it cannot be run from here · Super+/ lists every key".into()
+                },
+                pal.muted,
             )
         } else {
             (
@@ -798,6 +1186,20 @@ impl Panel {
         if self.focus >= self.targets.len() {
             self.focus = 0;
         }
+        if self.debug_hits {
+            let list: Vec<String> = self
+                .hits
+                .iter()
+                .map(|(r, h)| format!("{h:?}@{},{},{},{}", r.x, r.y, r.width, r.height))
+                .collect();
+            eprintln!(
+                "nirupanel: frame {}x{} focus {:?} hits {}",
+                self.w,
+                self.h,
+                self.targets.get(self.focus),
+                list.join(" ")
+            );
+        }
         self.r.present(&self.c, self.gc, self.win, self.w)?;
         self.c.flush()?;
         Ok(())
@@ -816,14 +1218,12 @@ impl Panel {
         let count = (cols * self.app_rows).min(self.shown.len());
         if count == 0 {
             let b = self.baseline(y as i16, lh * 2);
-            self.text(
-                pad as i16,
-                b,
-                "No app matches. Enter searches the launcher.",
-                pal.muted,
-                pal.background,
-                w - pad * 2,
-            )?;
+            let text = if self.showing_keys() {
+                "No app matches; the key bindings that do are below."
+            } else {
+                "No app matches. Enter searches the launcher."
+            };
+            self.text(pad as i16, b, text, pal.muted, pal.background, w - pad * 2)?;
         }
         for k in 0..count {
             let i = self.shown[k];
@@ -895,19 +1295,20 @@ impl Panel {
                 )?;
             }
             let name = self.items[i].name.clone();
-            let max = (i32::from(r.width) - 6) / adv.max(1);
-            let shown = truncate(&name, max as i16);
-            let nw = shown.chars().count() as i32 * adv;
-            let b = self.baseline(iy + isz as i16 + 4, lh);
+            let max = ((i32::from(r.width) - 6) / adv.max(1)).max(1) as usize;
             let colour = if focused { pal.foreground } else { pal.muted };
-            self.text(
-                r.x + ((i32::from(r.width) - nw) / 2).max(2) as i16,
-                b,
-                &shown,
-                colour,
-                bg,
-                i32::from(r.width),
-            )?;
+            for (n, shown) in wrap(&name, max, 2).iter().enumerate() {
+                let nw = shown.chars().count() as i32 * adv;
+                let b = self.baseline(iy + isz as i16 + 4 + (n as i32 * lh) as i16, lh);
+                self.text(
+                    r.x + ((i32::from(r.width) - nw) / 2).max(2) as i16,
+                    b,
+                    shown,
+                    colour,
+                    bg,
+                    i32::from(r.width),
+                )?;
+            }
             self.hits.push((r, hit));
             self.targets.push(hit);
         }
@@ -915,7 +1316,6 @@ impl Panel {
     }
 
     fn draw_cards(&mut self, y: i32, pad: i32) -> Result<i32> {
-        let pal = self.cfg.palette;
         let lh = i32::from(self.r.line_height);
         let w = i32::from(self.w);
         let cards: Vec<String> = self
@@ -937,22 +1337,27 @@ impl Panel {
                 ch,
             );
             let inner = cw - 16;
+            // The last line of text ends above the card's border, or above
+            // its buttons.
+            let bottom = r.y + ch as i16 - 4;
+            let above_buttons = r.y + ch as i16 - lh as i16 * 2 - 8;
             match m.as_str() {
                 "today" => {
                     let (x, ty) = self.card(r, "TODAY")?;
                     let lines = self.today_lines();
-                    self.lines(x, ty, inner, &lines)?;
+                    self.lines(x, ty, inner, bottom, &lines)?;
                     self.hits.push((r, Hit::Today));
                 }
                 "system" => {
                     let (x, ty) = self.card(r, "SYSTEM")?;
-                    self.draw_system(x, ty, inner)?;
+                    self.draw_system(x, ty, inner, bottom)?;
                     self.hits.push((r, Hit::System));
                 }
                 "updates" => {
                     let (x, ty) = self.card(r, "UPDATES")?;
                     let (lines, newer) = self.update_lines();
-                    self.lines(x, ty, inner, &lines)?;
+                    let end = if newer { above_buttons } else { bottom };
+                    self.lines(x, ty, inner, end, &lines)?;
                     if newer {
                         let br = rect(
                             x,
@@ -965,10 +1370,9 @@ impl Panel {
                 }
                 _ => {
                     let (x, ty) = self.card(r, "NOW PLAYING")?;
-                    self.draw_media(x, ty, inner, r)?;
+                    self.draw_media(x, ty, inner, r, above_buttons)?;
                 }
             }
-            let _ = pal;
         }
         let rows = cards.len().div_ceil(cols) as i32;
         Ok(y + rows * (ch + gap) + gap)
@@ -1034,11 +1438,10 @@ impl Panel {
                 out.push((sun, pal.muted));
             }
         }
-        out.truncate(5);
         out
     }
 
-    fn draw_system(&mut self, x: i16, y: i16, w: i32) -> Result<()> {
+    fn draw_system(&mut self, x: i16, y: i16, w: i32, bottom: i16) -> Result<()> {
         let pal = self.cfg.palette;
         let lh = self.r.line_height + 2;
         let mut row = 0i16;
@@ -1087,20 +1490,23 @@ impl Panel {
             )?;
         }
         let mut last = Vec::new();
+        // Each figure stays on one line with its unit.
         if let Some(c) = sys.temperature {
-            last.push(format!("{c:.0} °C"));
+            last.push(together(&format!("{c:.0} °C")));
         }
         if let Some((pct, charging)) = sys.battery {
-            last.push(format!(
+            last.push(together(&format!(
                 "battery {pct} %{}",
                 if charging { " ⚡" } else { "" }
-            ));
+            )));
         }
         if let Some(up) = sys.uptime {
-            last.push(format!("up {}", data::human_uptime(up)));
+            last.push(together(&format!("up {}", data::human_uptime(up))));
         }
         if !last.is_empty() {
-            line(self, last.join(" · "), None)?;
+            // The rest on as many lines as it needs and the card holds.
+            let ty = y + row * lh;
+            self.lines(x, ty, w, bottom, &[(last.join(" · "), pal.foreground)])?;
         }
         Ok(())
     }
@@ -1125,7 +1531,7 @@ impl Panel {
         (out, u.newer.is_some())
     }
 
-    fn draw_media(&mut self, x: i16, y: i16, w: i32, card: Rectangle) -> Result<()> {
+    fn draw_media(&mut self, x: i16, y: i16, w: i32, card: Rectangle, bottom: i16) -> Result<()> {
         let pal = self.cfg.palette;
         let lh = i32::from(self.r.line_height);
         let bw = (w - 16) / 3;
@@ -1143,7 +1549,7 @@ impl Panel {
                     ),
                     (m.artist.clone(), pal.muted),
                 ];
-                self.lines(x, y, w, &lines)?;
+                self.lines(x, y, w, bottom, &lines)?;
                 self.button(rect(x, by, bw, lh + 10), "◀◀", Hit::Previous, None)?;
                 let play = if m.playing { "❚❚" } else { "▶" };
                 self.button(
@@ -1165,7 +1571,7 @@ impl Panel {
                 } else {
                     "…"
                 };
-                self.lines(x, y, w, &[(text.into(), pal.muted)])?;
+                self.lines(x, y, w, bottom, &[(text.into(), pal.muted)])?;
                 self.button(
                     rect(x, by, w.min(lh * 10), lh + 10),
                     "Open NIRUAMP",
@@ -1175,6 +1581,206 @@ impl Panel {
             }
         }
         Ok(())
+    }
+
+    fn computer(&self, i: usize) -> Option<&Device> {
+        self.computers.as_ref()?.as_ref().ok()?.get(i)
+    }
+
+    /// The computers in a card: a grid of cells with the name, online in
+    /// the success colour or offline muted, and what each one is.
+    fn draw_computers(&mut self, y: i32, pad: i32) -> Result<i32> {
+        let pal = self.cfg.palette;
+        let lh = i32::from(self.r.line_height);
+        let adv = i32::from(self.r.advance).max(1);
+        let w = i32::from(self.w);
+        let gap = pad / 2;
+        let height = Self::computers_height(lh, self.computer_rows);
+        let r = rect(pad as i16, y as i16, w - pad * 2, height);
+        let (x, ty) = self.card(r, "COMPUTERS")?;
+        let inner = i32::from(r.width) - 16;
+        let bottom = r.y + r.height as i16 - 4;
+        let list = match self.computers.clone() {
+            None => {
+                self.lines(x, ty, inner, bottom, &[("…".into(), pal.muted)])?;
+                return Ok(y + height + gap);
+            }
+            Some(Err(e)) => {
+                self.lines(x, ty, inner, bottom, &[(e, pal.muted)])?;
+                return Ok(y + height + gap);
+            }
+            Some(Ok(list)) if list.is_empty() => {
+                let text = "No computers to show: see [panel.computers] hosts and hide";
+                self.lines(x, ty, inner, bottom, &[(text.into(), pal.muted)])?;
+                return Ok(y + height + gap);
+            }
+            Some(Ok(list)) => list,
+        };
+        let cell_gap = 6;
+        let cols = ((inner + cell_gap) / (adv * 24 + cell_gap)).max(1) as usize;
+        let cw = (inner - cell_gap * (cols as i32 - 1)) / cols as i32;
+        let chh = Self::cell_height(lh);
+        self.computer_cols = cols;
+        let room = cols * self.computer_rows;
+        // More than there is room for: the last cell says how many more.
+        let shown = if list.len() > room {
+            room.saturating_sub(1)
+        } else {
+            list.len()
+        };
+        let now = data::now();
+        let row_h = (lh + 2) as i16;
+        let chars = ((cw - 12) / adv).max(1) as usize;
+        for (k, d) in list.iter().enumerate().take(shown) {
+            let (col, row) = ((k % cols) as i32, (k / cols) as i32);
+            let cell = rect(
+                x + (col * (cw + cell_gap)) as i16,
+                ty + (row * (chh + 4)) as i16,
+                cw,
+                chh,
+            );
+            let hit = Hit::Computer(k);
+            let focused = self.targets.len() == self.focus;
+            let bg = if focused || self.hover == Some(hit) {
+                pal.selected
+            } else {
+                pal.background
+            };
+            self.fill(cell, if focused { pal.accent } else { bg })?;
+            self.fill(
+                rect(
+                    cell.x + 1,
+                    cell.y + 1,
+                    i32::from(cell.width) - 2,
+                    i32::from(cell.height) - 2,
+                ),
+                bg,
+            )?;
+            let (dot, name_colour) = if d.online {
+                (pal.success, pal.foreground)
+            } else {
+                (pal.muted, pal.muted)
+            };
+            let tx = cell.x + 6;
+            let b = self.baseline(cell.y + 3, i32::from(row_h));
+            self.text(tx, b, "●", dot, bg, adv * 2)?;
+            let name = wrap(&d.name, chars.saturating_sub(2).max(1), 1).remove(0);
+            self.text(
+                tx + adv as i16 * 2,
+                b,
+                &name,
+                name_colour,
+                bg,
+                (chars as i32 - 2) * adv,
+            )?;
+            let (detail, colour) = computer_detail(d, now);
+            let colour = if colour { pal.warning } else { pal.muted };
+            for (n, l) in wrap(&detail, chars, 2).iter().enumerate() {
+                let b = self.baseline(cell.y + 3 + row_h * (n as i16 + 1), i32::from(row_h));
+                self.text(tx, b, l, colour, bg, chars as i32 * adv)?;
+            }
+            self.hits.push((cell, hit));
+            self.targets.push(hit);
+        }
+        if shown < list.len() {
+            let k = shown;
+            let (col, row) = ((k % cols) as i32, (k / cols) as i32);
+            let cx = x + (col * (cw + cell_gap)) as i16 + 6;
+            let cy = ty + (row * (chh + 4)) as i16 + 3;
+            let more = format!(
+                "+{} more · [panel.computers] hosts picks them",
+                list.len() - shown
+            );
+            for (n, l) in wrap(&more, chars, 3).iter().enumerate() {
+                let b = self.baseline(cy + row_h * n as i16, i32::from(row_h));
+                self.text(cx, b, l, pal.muted, pal.surface, chars as i32 * adv)?;
+            }
+        }
+        Ok(y + height + gap)
+    }
+
+    /// Found key bindings in a card of `area` height: the keys on the left,
+    /// what they do on up to two lines beside them.
+    fn draw_keys(&mut self, y: i32, area: i32, pad: i32) -> Result<i32> {
+        let pal = self.cfg.palette;
+        let lh = i32::from(self.r.line_height);
+        let adv = i32::from(self.r.advance).max(1);
+        let w = i32::from(self.w);
+        let gap = pad / 2;
+        let r = rect(pad as i16, y as i16, w - pad * 2, area - gap);
+        let found = self.key_shown.len();
+        let title = if found >= KEY_RESULTS {
+            format!("KEY BINDINGS · {found}+")
+        } else {
+            format!("KEY BINDINGS · {found}")
+        };
+        let (x, ty) = self.card(r, &title)?;
+        let inner = i32::from(r.width) - 16;
+        let bottom = i32::from(r.y) + i32::from(r.height) - 4;
+        let Some(items) = self.keys.clone() else {
+            return Ok(y + area);
+        };
+        let shown = self.key_shown.clone();
+        let label_chars = shown
+            .iter()
+            .map(|&i| key_label(&items[i]).chars().count())
+            .max()
+            .unwrap_or(8)
+            .clamp(8, 24);
+        let desc_x = x + ((label_chars + 2) as i32 * adv) as i16;
+        let desc_chars = ((inner - (label_chars as i32 + 2) * adv) / adv).max(8) as usize;
+        let row_h = lh + 2;
+        let mut ry = i32::from(ty);
+        let mut left = 0;
+        for (k, &i) in shown.iter().enumerate() {
+            let item = &items[i];
+            let lines = wrap(&item.name, desc_chars, 2);
+            let rh = lines.len() as i32 * row_h + 4;
+            // Keep a line for "more" when this is not the last one.
+            let reserve = if k + 1 < shown.len() { row_h } else { 0 };
+            if ry + rh > bottom - reserve {
+                left = shown.len() - k;
+                break;
+            }
+            let hit = Hit::Key(i);
+            let focused = self.targets.len() == self.focus;
+            let bg = if focused || self.hover == Some(hit) {
+                pal.selected
+            } else {
+                pal.surface
+            };
+            let row = rect(x - 4, ry as i16, inner + 8, rh - 2);
+            if focused {
+                self.fill(row, pal.accent)?;
+                self.fill(
+                    rect(row.x + 1, row.y + 1, i32::from(row.width) - 2, rh - 4),
+                    bg,
+                )?;
+            } else {
+                self.fill(row, bg)?;
+            }
+            let b = self.baseline(ry as i16 + 1, row_h);
+            let label = wrap(&key_label(item), label_chars, 1).remove(0);
+            self.text(x, b, &label, pal.warning, bg, label_chars as i32 * adv)?;
+            let colour = if matches!(item.target, Target::Info) {
+                pal.muted
+            } else {
+                pal.foreground
+            };
+            for (n, l) in lines.iter().enumerate() {
+                let b = self.baseline((ry + 1 + n as i32 * row_h) as i16, row_h);
+                self.text(desc_x, b, l, colour, bg, desc_chars as i32 * adv)?;
+            }
+            self.hits.push((row, hit));
+            self.targets.push(hit);
+            ry += rh;
+        }
+        if left > 0 {
+            let b = self.baseline(ry as i16, row_h);
+            let more = format!("+{left} more · type more words, or Super+/ lists every key");
+            self.text(x, b, &more, pal.muted, pal.surface, inner)?;
+        }
+        Ok(y + area)
     }
 
     fn draw_toggles(&mut self, y: i32, pad: i32) -> Result<i32> {
@@ -1234,7 +1840,48 @@ impl Panel {
         if !matches!(hit, Hit::Power(_)) {
             self.confirm = None;
         }
+        if !matches!(hit, Hit::Key(_)) {
+            self.confirm_key = None;
+        }
         match hit {
+            Hit::Computer(i) => self.on_computer(i, ComputerAction::Ssh),
+            Hit::Key(i) => {
+                let Some(item) = self.keys.as_ref().and_then(|v| v.get(i)).cloned() else {
+                    return true;
+                };
+                match item.target.clone() {
+                    Target::RunKey(keys) => {
+                        if risky_key(&item) && self.confirm_key != Some(i) {
+                            self.confirm_key = Some(i);
+                            return true;
+                        }
+                        // Close first: the binding acts on the window that
+                        // had the focus before the panel, or opens the panel.
+                        self.close();
+                        let _ = self.c.get_input_focus().map(|r| r.reply());
+                        let argv = ["niructl".to_string(), "keys".into(), "run".into(), keys];
+                        if let Err(e) = spawn_command(&argv, None, false, &self.cfg) {
+                            eprintln!("nirupanel: {e}");
+                        }
+                        false
+                    }
+                    Target::Spawn { argv, .. } => {
+                        self.close();
+                        if let Err(e) = spawn_command(&argv, None, false, &self.cfg) {
+                            eprintln!("nirupanel: {e}");
+                        }
+                        false
+                    }
+                    _ => {
+                        self.note = format!(
+                            "{}: {} (shown only, it cannot be run from here)",
+                            key_label(&item),
+                            item.name
+                        );
+                        true
+                    }
+                }
+            }
             Hit::App(i) => {
                 let item = self.items[i].clone();
                 if let Target::Spawn {
@@ -1311,6 +1958,51 @@ impl Panel {
         }
     }
 
+    /// Do something with a computer. `false` closes the panel. SSH runs
+    /// only in a terminal the user sees: there are no keys between the
+    /// computers, so it asks for a password there.
+    fn on_computer(&mut self, i: usize, what: ComputerAction) -> bool {
+        let Some(d) = self.computer(i).cloned() else {
+            return true;
+        };
+        if !safe_host(&d.target) {
+            self.note = format!("{} has a name ssh cannot take", d.name);
+            return true;
+        }
+        let copy = |text: &str| match copy_to_clipboard(text) {
+            Ok(()) => format!("Copied {text}"),
+            Err(e) => e,
+        };
+        match what {
+            ComputerAction::Ssh => {
+                let argv = vec!["ssh".to_string(), d.target.clone()];
+                match spawn_terminal_command(&argv, true, &self.cfg) {
+                    Ok(()) => false,
+                    Err(e) => {
+                        self.note = e;
+                        true
+                    }
+                }
+            }
+            ComputerAction::Files => {
+                let uri = format!("sftp://{}/", d.target);
+                self.spawn(&["xdg-open", &uri])
+            }
+            ComputerAction::CopyIp => {
+                self.note = if d.ip.is_empty() {
+                    format!("{} has no Tailscale address", d.name)
+                } else {
+                    copy(&d.ip)
+                };
+                true
+            }
+            ComputerAction::CopyName => {
+                self.note = copy(&d.name);
+                true
+            }
+        }
+    }
+
     fn spawn(&mut self, argv: &[&str]) -> bool {
         let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
         match spawn_command(&argv, None, false, &self.cfg) {
@@ -1322,62 +2014,56 @@ impl Panel {
         }
     }
 
-    /// Up and down move a row in the grid of apps, otherwise to the
-    /// group before or after; left and right go one step.
+    /// Up and down move a row in a grid (the apps, the computers) or a
+    /// line among the key bindings, otherwise to the group before or after;
+    /// left and right go one step.
     fn step(&mut self, sym: u32) {
         let n = self.targets.len();
         if n == 0 {
             return;
         }
-        let apps = self
-            .targets
-            .iter()
-            .filter(|t| matches!(t, Hit::App(_)))
-            .count();
+        self.moved = true;
         let lh = i32::from(self.r.line_height);
         let isz = Self::icon_size(lh);
         let tw = (isz + lh * 2).max(i32::from(self.r.advance) * 11);
-        let cols = ((i32::from(self.w) - lh * 2) / tw).max(1) as usize;
-        let f = self.focus;
-        self.focus = match sym {
-            0xff51 => f.saturating_sub(1),
-            0xff53 => (f + 1).min(n - 1),
-            0xff52 if f < apps && f >= cols => f - cols,
-            0xff54 if f + cols < apps => f + cols,
-            0xff54 if f < apps => apps.min(n - 1),
-            0xff52 if f >= apps && apps > 0 => {
-                // Back up to the group before this one.
-                let group = |h: &Hit| std::mem::discriminant(h);
-                let mine = group(&self.targets[f]);
-                let start = (0..f)
-                    .rev()
-                    .find(|&k| group(&self.targets[k]) != mine)
-                    .unwrap_or(0);
-                let prev = group(&self.targets[start]);
-                (0..=start)
-                    .rev()
-                    .take_while(|&k| group(&self.targets[k]) == prev)
-                    .last()
-                    .unwrap_or(0)
-            }
-            0xff54 => {
-                let group = |h: &Hit| std::mem::discriminant(h);
-                let mine = group(&self.targets[f]);
-                (f..n)
-                    .find(|&k| group(&self.targets[k]) != mine)
-                    .unwrap_or(f)
-            }
-            _ => f,
-        };
+        let app_cols = ((i32::from(self.w) - lh * 2) / tw).max(1) as usize;
+        let f = self.focus.min(n - 1);
+        let groups: Vec<u8> = self.targets.iter().map(|t| group_of(*t)).collect();
+        self.focus = step_in(&groups, f, sym, |g| match g {
+            0 => app_cols,
+            3 => self.computer_cols.max(1),
+            4 => 1,
+            _ => 0,
+        });
     }
 
     fn key(&mut self, e: KeyPressEvent) -> Result<bool> {
         let sym = self.keymap.symbol(e.detail, e.state);
         let ctrl = e.state.contains(KeyButMask::CONTROL);
+        let shift = e.state.contains(KeyButMask::SHIFT);
         self.note.clear();
+        let focused = self.targets.get(self.focus).copied();
         match sym {
+            // Ctrl+C copies a computer's address, Ctrl+Shift+C its name.
+            0x63 | 0x43 if ctrl => {
+                if let Some(Hit::Computer(i)) = focused {
+                    let what = if shift {
+                        ComputerAction::CopyName
+                    } else {
+                        ComputerAction::CopyIp
+                    };
+                    self.on_computer(i, what);
+                }
+            }
+            0xff0d | 0xff8d if shift && matches!(focused, Some(Hit::Computer(_))) => {
+                if let Some(Hit::Computer(i)) = focused {
+                    if !self.on_computer(i, ComputerAction::Files) {
+                        return Ok(false);
+                    }
+                }
+            }
             0xff1b => {
-                if self.confirm.take().is_some() {
+                if self.confirm.take().is_some() || self.confirm_key.take().is_some() {
                 } else if !self.query.is_empty() {
                     self.query.clear();
                     self.refilter();
@@ -1386,7 +2072,12 @@ impl Panel {
                 }
             }
             0xff0d | 0xff8d => {
-                if let Some(hit) = self.targets.get(self.focus).copied() {
+                // While searching, Enter takes what the search found (an
+                // app, a key binding), or the target moved to by hand.
+                let searching = !self.query.trim().is_empty();
+                let hit = focused
+                    .filter(|h| !searching || self.moved || matches!(h, Hit::App(_) | Hit::Key(_)));
+                if let Some(hit) = hit {
                     if !self.activate(hit) {
                         return Ok(false);
                     }
@@ -1403,8 +2094,12 @@ impl Panel {
                     return Ok(false);
                 }
             }
-            0xff09 => self.focus = (self.focus + 1) % self.targets.len().max(1),
+            0xff09 => {
+                self.moved = true;
+                self.focus = (self.focus + 1) % self.targets.len().max(1);
+            }
             0xfe20 => {
+                self.moved = true;
                 let n = self.targets.len().max(1);
                 self.focus = (self.focus + n - 1) % n;
             }
@@ -1452,6 +2147,11 @@ impl Panel {
                         self.system = Some(sys);
                         self.system_busy = false;
                     }
+                    Msg::Computers(list) => self.computers = Some(list),
+                    Msg::Keys(items) => {
+                        self.keys = Some(items);
+                        self.filter_keys();
+                    }
                     Msg::Icon(key, p) => {
                         self.pending.remove(&key);
                         self.pictures.insert(key, p);
@@ -1490,20 +2190,31 @@ impl Panel {
                             // A click outside closes, as the launcher does.
                             return Ok(());
                         }
-                        if e.detail != 1 {
-                            continue;
-                        }
                         let hit = self
                             .hits
                             .iter()
                             .rev()
                             .find(|(r, _)| inside(*r, e.event_x, e.event_y))
                             .map(|(_, h)| *h);
+                        // A computer: the middle button opens its files, the
+                        // right one copies its address.
+                        let other = match (e.detail, hit) {
+                            (2, Some(Hit::Computer(i))) => Some((i, ComputerAction::Files)),
+                            (3, Some(Hit::Computer(i))) => Some((i, ComputerAction::CopyIp)),
+                            (1, _) => None,
+                            _ => continue,
+                        };
                         if let Some(hit) = hit {
                             if let Some(k) = self.targets.iter().position(|t| *t == hit) {
                                 self.focus = k;
+                                self.moved = true;
                             }
-                            if !self.activate(hit) {
+                            self.note.clear();
+                            let open = match other {
+                                Some((i, what)) => self.on_computer(i, what),
+                                None => self.activate(hit),
+                            };
+                            if !open {
                                 return Ok(());
                             }
                         }
@@ -1565,6 +2276,14 @@ mod tests {
         assert_eq!(c.panel.modules, ["power", "apps"]);
         assert_eq!(c.panel.app_rows, 4);
         assert_eq!(cfg("[panel]\nmodules = []").panel.modules, MODULES);
+        let c = cfg(
+            "[panel.computers]\nhosts = [\"othala\", \" \", \"mac\"]\nhide = [\"box\"]\nrows = 0",
+        );
+        assert_eq!(c.panel.computer_hosts, ["othala", "mac"]);
+        assert_eq!(c.panel.computer_hide, ["box"]);
+        assert_eq!(c.panel.computer_rows, 1);
+        assert!(cfg("").panel.computer_hosts.is_empty());
+        assert_eq!(cfg("").panel.computer_rows, 2);
     }
 
     #[test]
@@ -1579,13 +2298,194 @@ mod tests {
     #[test]
     fn the_panel_fits_its_modules() {
         let all: Vec<String> = MODULES.iter().map(|s| s.to_string()).collect();
-        let tall = Panel::height_for(&all, 2, 19, 9, 1000);
-        let short = Panel::height_for(&all, 1, 19, 9, 1000);
+        let tall = Panel::height_for(&all, 2, 2, 19, 9, 1000);
+        let short = Panel::height_for(&all, 1, 2, 19, 9, 1000);
         assert!(tall > short);
+        assert!(Panel::height_for(&all, 1, 1, 19, 9, 1000) < short);
         let none: Vec<String> = vec!["power".into()];
-        assert!(Panel::height_for(&none, 2, 19, 9, 1000) < short);
+        assert!(Panel::height_for(&none, 2, 2, 19, 9, 1000) < short);
+        // Key bindings get room of their own without cards or computers.
+        let keys: Vec<String> = vec!["power".into(), "keys".into()];
+        assert_eq!(
+            Panel::height_for(&keys, 2, 2, 19, 9, 1000),
+            Panel::height_for(&none, 2, 2, 19, 9, 1000) + Panel::keys_height(19)
+        );
         assert_eq!(Panel::card_columns(1000, 9, 4), 4);
         assert_eq!(Panel::card_columns(720, 9, 4), 3);
         assert_eq!(Panel::card_columns(400, 9, 4), 1);
+        // A card holds six lines of text below its title, four above its
+        // buttons.
+        for lh in [15, 19, 24, 30] {
+            assert!(
+                (Panel::card_height(lh) - 4 - (lh + 10)) / (lh + 2) >= 6,
+                "{lh}"
+            );
+            assert!((Panel::card_height(lh) - lh * 2 - 8 - (lh + 10)) / (lh + 2) >= 4);
+        }
+        let lh = 19;
+        // An app's icon and two lines of its name fit in its tile.
+        assert!(6 + Panel::icon_size(lh) + 4 + lh * 2 <= Panel::tile_height(lh) - 4);
+    }
+
+    fn key_item(name: &str, detail: &str, keywords: &str, target: Target) -> Item {
+        Item {
+            key: format!("keys:NIRUWM:{detail}"),
+            group: "Session".into(),
+            name: name.into(),
+            detail: detail.into(),
+            keywords: keywords.into(),
+            favorite: false,
+            target,
+        }
+    }
+
+    #[test]
+    fn key_bindings_that_end_or_close_things_ask_first() {
+        let run = || Target::RunKey("super+x".into());
+        let close = key_item(
+            "Close the focused window",
+            "Super+Q",
+            "super+q Super+Q close NIRUWM #k40-71",
+            run(),
+        );
+        let quit = key_item(
+            "End the session",
+            "Super+Ctrl+Shift+Q",
+            "super+ctrl+shift+q x quit NIRUWM",
+            run(),
+        );
+        let sleep = key_item(
+            "Lock, then suspend the computer",
+            "Super+Shift+Escape",
+            "suspend",
+            run(),
+        );
+        let term = key_item(
+            "Open a terminal",
+            "Super+Enter · conflict",
+            "super+Return Super+Enter terminal NIRUWM",
+            run(),
+        );
+        let lock = key_item(
+            "Lock the screen",
+            "Super+Escape",
+            "super+Escape lock NIRUWM",
+            run(),
+        );
+        assert!(risky_key(&close) && risky_key(&quit) && risky_key(&sleep));
+        assert!(!risky_key(&term) && !risky_key(&lock));
+        assert_eq!(key_label(&term), "Super+Enter");
+    }
+
+    #[test]
+    fn key_bindings_are_found_by_words_in_any_order() {
+        let sheet = r#"{"version":1,"entries":[
+          {"keys":"super+Return","label":"Super+Enter","mods":64,"keysym":65293,"action":"terminal","run":null,
+           "description":"Open a terminal","group":"Apps and launchers","source":"niruwm","app":null,"conflicts":[]},
+          {"keys":"super+shift+s","label":"Super+Shift+S","mods":65,"keysym":115,"action":"screenshot region","run":null,
+           "description":"Skärmbild of a region","group":"Screenshots and color","source":"niruwm","app":null,"conflicts":[]},
+          {"keys":"super+space","label":"Super+Space","mods":64,"keysym":32,"action":"spawn nirulauncher --panel","run":null,
+           "description":"Open NIRUPANEL","group":"Apps and launchers","source":"niruwm","app":null,"conflicts":[]}]}"#;
+        let items = crate::modes::keys::parse_sheet(sheet).unwrap();
+        let usage = usage::Usage::default();
+        let names = |q: &str| -> Vec<String> {
+            ranked_for_mode(&items, q, &usage, "keys")
+                .order
+                .into_iter()
+                .map(|i| items[i].name.clone())
+                .collect()
+        };
+        assert_eq!(names("terminal open"), ["Open a terminal"]);
+        assert_eq!(names("TERMINAL"), ["Open a terminal"]);
+        // Diacritics either way.
+        assert_eq!(names("skarmbild region"), ["Skärmbild of a region"]);
+        assert_eq!(names("REGION skärm"), ["Skärmbild of a region"]);
+        // By the key itself.
+        assert_eq!(names("super+space")[0], "Open NIRUPANEL");
+        assert!(names("nothing like this").is_empty());
+    }
+
+    #[test]
+    fn arrows_move_in_grids_and_between_groups() {
+        // Six apps in rows of four, three computers in rows of two, two keys.
+        let g = [0, 0, 0, 0, 0, 0, 3, 3, 3, 4, 4];
+        let cols = |g: u8| match g {
+            0 => 4,
+            3 => 2,
+            4 => 1,
+            _ => 0,
+        };
+        let (up, down, left, right) = (0xff52, 0xff54, 0xff51, 0xff53);
+        assert_eq!(step_in(&g, 1, down, cols), 5);
+        assert_eq!(
+            step_in(&g, 3, down, cols),
+            6,
+            "below the last row: the next group"
+        );
+        assert_eq!(step_in(&g, 5, up, cols), 1);
+        assert_eq!(step_in(&g, 1, up, cols), 1, "nothing above");
+        assert_eq!(step_in(&g, 6, down, cols), 8);
+        assert_eq!(step_in(&g, 7, down, cols), 9);
+        assert_eq!(step_in(&g, 8, up, cols), 6);
+        assert_eq!(step_in(&g, 6, up, cols), 0, "the start of the apps");
+        assert_eq!(step_in(&g, 9, down, cols), 10);
+        assert_eq!(step_in(&g, 10, down, cols), 10);
+        assert_eq!(step_in(&g, 0, left, cols), 0);
+        assert_eq!(step_in(&g, 10, right, cols), 10);
+        // Not a grid: Up and Down go to the next group.
+        let flat = [5, 5, 5, 6, 6];
+        assert_eq!(step_in(&flat, 1, down, cols), 3);
+        assert_eq!(step_in(&flat, 4, up, cols), 0);
+    }
+
+    #[test]
+    fn computers_say_what_they_are() {
+        let d = |os: &str| Device {
+            name: "othala".into(),
+            host_name: "othala".into(),
+            target: "othala".into(),
+            ip: "100.64.0.2".into(),
+            os: os.into(),
+            online: true,
+            this: false,
+            mine: true,
+            last_seen: None,
+            exit_node: false,
+            direct: Some(true),
+            relay: "ams".into(),
+        };
+        assert_eq!(computer_detail(&d("linux"), 0).0, "Linux · online · direct");
+        let relayed = Device {
+            direct: Some(false),
+            exit_node: true,
+            ..d("macOS")
+        };
+        assert_eq!(
+            computer_detail(&relayed, 0).0.replace(wrap::NBSP, " "),
+            "macOS · online · relay ams · exit node"
+        );
+        let off = Device {
+            online: false,
+            direct: None,
+            last_seen: Some(1000),
+            ..d("windows")
+        };
+        assert_eq!(
+            computer_detail(&off, 1000 + 7200)
+                .0
+                .replace(wrap::NBSP, " "),
+            "Windows · offline · seen 2 h ago"
+        );
+        let me = Device {
+            this: true,
+            ..d("linux")
+        };
+        assert_eq!(
+            computer_detail(&me, 0),
+            ("this computer · Linux".into(), true)
+        );
+        assert!(safe_host("othala") && safe_host("100.64.0.2") && safe_host("fd7a::1"));
+        assert!(!safe_host("-oProxyCommand=x") && !safe_host("a b") && !safe_host(""));
+        assert!(!safe_host("x;rm"));
     }
 }

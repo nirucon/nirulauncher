@@ -318,6 +318,37 @@ fn parse_media(v: &serde_json::Value) -> Option<Media> {
     })
 }
 
+// --------------------------------------------------------------- computers
+
+/// Whether a program is on PATH (a few `stat` calls, no process).
+pub(crate) fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(dir.join(program))
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    })
+}
+
+/// The tailnet's computers from the local Tailscale daemon (`tailscale
+/// status --json`, at most 1.5 seconds). No network request of its own.
+pub(crate) fn computers() -> Result<Vec<crate::tailscale::Device>, String> {
+    let out = bounded_bytes(
+        &["tailscale", "status", "--json"],
+        Duration::from_millis(1500),
+    )
+    .ok_or_else(|| "Tailscale did not answer: is it running?".to_string())?;
+    crate::tailscale::devices(&out)
+}
+
+/// Seconds since the epoch, now.
+pub(crate) fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 // ----------------------------------------------------------------- toggles
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -416,6 +447,12 @@ fn bluetooth_on(text: &str) -> Option<bool> {
 /// Run a helper with a deadline; its stdout, or `None` when it is missing,
 /// fails or takes too long (it is then killed).
 pub(crate) fn bounded(argv: &[&str], limit: Duration) -> Option<String> {
+    bounded_bytes(argv, limit).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// `bounded`, the output as bytes. It is read while the helper runs, so a
+/// large answer cannot fill the pipe and stall it.
+pub(crate) fn bounded_bytes(argv: &[&str], limit: Duration) -> Option<Vec<u8>> {
     let mut child = Command::new(argv[0])
         .args(&argv[1..])
         .stdin(Stdio::null())
@@ -424,12 +461,16 @@ pub(crate) fn bounded(argv: &[&str], limit: Duration) -> Option<String> {
         .spawn()
         .ok()?;
     let deadline = std::time::Instant::now() + limit;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        use std::io::Read;
+        stdout.read_to_end(&mut out).ok().map(|_| out)
+    });
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut out = String::new();
-                use std::io::Read;
-                child.stdout.take()?.read_to_string(&mut out).ok()?;
+                let out = reader.join().ok()??;
                 return status.success().then_some(out);
             }
             Ok(None) if std::time::Instant::now() < deadline => {

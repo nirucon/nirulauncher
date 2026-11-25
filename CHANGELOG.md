@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.22.0 (2026-11-25)
+
+- **NIRUPANEL computers** (module `computers`): your Tailscale computers,
+  read once when the panel opens from `tailscale status --json` on a worker
+  (at most 1.5 seconds; nothing at login, nothing without Tailscale). This
+  computer and the peers of the same user, online first: the name, online or
+  offline in the theme's colours, the system, "this computer", when an
+  offline one was last seen ("seen 2 h ago"), and direct, relay or exit node
+  for the online ones. Enter or a click opens `ssh NAME` in the terminal,
+  Shift+Enter or a middle click opens `sftp://NAME/` (`xdg-open`), Ctrl+C or
+  a right click copies the Tailscale address, Ctrl+Shift+C the name.
+  `[panel.computers] hosts`, `hide` and `rows` choose them.
+- **Key bindings in the panel's search** (module `keys`): typing also finds
+  the key bindings in effect (`niructl keys --json`, read on the first search
+  and kept while the panel is open), words in any order, case and accents
+  ignored. They show where the cards and computers are, the keys beside what
+  they do. Enter runs one through `niructl keys run`; ending the session,
+  sleeping and closing or killing a window ask once more.
+- **Text wraps** in the panel: app names on two lines, the cards' lines on
+  up to three, the computers on two, between words, with "…" only when that
+  is not enough. A figure keeps its unit ("up 36 d 10 h"). The cards are a
+  little taller so that the today card's lines all fit; before, its fifth
+  line could reach the card's border.
+- Enter while searching, when nothing matched and the focus was never
+  moved, no longer presses the panel's first button (Open NIRUAMP, say): it
+  searches the launcher, as the hint says.
+- Arrow keys move by rows among the computers and the key bindings, as
+  among the apps.
+- `computers` and `keys` are in the default module list. A configured
+  `modules` list without them leaves them out.
+
 ## 0.21.1 (2026-11-25)
 
 The 0.21.0 tag was not released (its code was not formatted). Everything

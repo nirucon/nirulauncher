@@ -23,8 +23,10 @@ second, competing settings implementation.
 - NIRUPANEL (`Super+Space`, `nirulauncher --panel`): a floating panel in
   the middle of the screen with a retro logo, app search over icons, and
   modules for today (weather and events from NIRUTODAY), the system, updates,
-  what plays in NIRUAMP, quick switches (do not disturb, night light, Wi-Fi,
-  Bluetooth) and power. Choose and order the modules in `[panel]`.
+  what plays in NIRUAMP, your Tailscale computers (ssh, files, copy the
+  address), quick switches (do not disturb, night light, Wi-Fi, Bluetooth)
+  and power. Its search also finds key bindings and runs them. Choose and
+  order the modules in `[panel]`.
 - Application search with multi-word, keyword, diacritic-insensitive and
   conservative fuzzy matching, favourites, pins and launch-history ranking.
 - Window switcher and workspace-grouped overview.
@@ -317,9 +319,15 @@ label = "SearXNG (home)"
 url = "https://searx.example/search?q={query}"
 alias = "sx"
 
-[panel]                       # NIRUPANEL; both keys are optional
-modules = ["apps", "today", "system", "updates", "media", "toggles", "power"]
+[panel]                       # NIRUPANEL; every key is optional
+modules = ["apps", "today", "system", "updates", "media", "computers",
+           "toggles", "power", "keys"]
 app_rows = 2                  # rows of apps, 1 to 4
+
+[panel.computers]             # the computers module; every key is optional
+# hosts = ["othala", "nirumac"]   # these, in this order (default: your own)
+# hide = ["homeassistant"]        # never these
+rows = 2                      # rows of computers, 1 to 4
 
 [files]                       # file search; every key is optional
 enabled = true
@@ -336,13 +344,40 @@ show_hidden = false
 weather, warnings and today's events from `nirutoday --brief`), `system`
 (CPU, memory, disk, temperature, battery, uptime), `updates` (NIRUX and system
 packages, as NIRUBAR counted them), `media` (what NIRUAMP plays, with
-previous, play or pause and next), `toggles` and `power` (log out, restart and
-shut down ask once more). Type to search, Enter starts the chosen app, Tab and
-the arrows move, Esc clears the search or closes, and `Super+Space` again closes
-it. Everything is read locally; slow sources are read in the background, so
-the panel shows at once. Icons are drawn from the icon themes (PNG and SVG)
-once and kept in `~/.cache/nirulauncher/icons/`; an app without one gets a
-letter tile.
+previous, play or pause and next), `computers` (your Tailscale computers),
+`toggles`, `power` (log out, restart and shut down ask once more) and `keys`
+(the search also finds key bindings). A configured list without a module
+leaves it out, so add `computers` and `keys` to an older list to get them.
+Type to search, Enter starts the chosen app, Tab and the arrows move, Esc
+clears the search or closes, and `Super+Space` again closes it. Everything is
+read locally; slow sources are read in the background, so the panel shows at
+once. Icons are drawn from the icon themes (PNG and SVG) once and kept in
+`~/.cache/nirulauncher/icons/`; an app without one gets a letter tile. Text
+that is too long for its place wraps between words onto a second or third
+line, and ends in "…" only when even that is not enough.
+
+*Computers.* When the panel opens it asks the local Tailscale daemon once
+(`tailscale status --json`, at most 1.5 seconds, never at login and never
+when `tailscale` is not installed). It shows this computer and the computers
+of the same Tailscale user: the name, online in the theme's success colour or
+offline muted, the system, "this computer", how long ago an offline one was
+seen, and whether an online one is reached directly, through a relay, or is
+your exit node. `[panel.computers] hosts` picks computers and their order,
+`hide` leaves some out, `rows` sets the rows. On a computer, Enter or a click
+opens `ssh NAME` in your terminal (there you type a password, nothing runs
+in the background), Shift+Enter or a middle click opens `sftp://NAME/` with
+`xdg-open`, Ctrl+C or a right click copies its Tailscale address, and
+Ctrl+Shift+C its name.
+
+*Key bindings.* Typing also searches the key bindings in effect, from
+`niructl keys --json` (NIRUWM's table and the keys other programs register),
+read once on the first search and kept while the panel is open. Words match
+in any order, without regard to case or accents, and a combination such as
+`super+t` finds its key. The ones found take the place of the cards and the
+computers, with the keys on the left and what they do beside them. Enter or a
+click runs one through `niructl keys run`, as if the key were pressed; one
+that ends the session, sleeps, or closes or kills a window asks once more. A
+row that cannot be run is shown only. `Super+/` still lists them all.
 
 `{query}` is replaced by the percent-encoded phrase; only `http` and `https`
 addresses are opened. `enabled = false` on a built-in id turns that engine off.
