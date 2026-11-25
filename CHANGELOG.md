@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.22.1 (2026-11-25)
+## 0.22.2 (2026-11-25)
 
-- The same as 0.22.0, which GitHub failed to publish.
+- The same as 0.22.0, which GitHub failed to publish (0.22.1 was tagged
+  with a stale Cargo.lock and never released).
 
 ## 0.22.0 (2026-11-25)
 
