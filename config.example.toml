@@ -107,15 +107,21 @@ terminal = ["kitty"]
 #            ".gradle", ".npm", ".cargo", ".rustup"]
 
 # NIRUPANEL (Super+Space, nirulauncher --panel): its modules, in order, out
-# of apps, today, system, updates, media, computers, toggles, power and keys,
-# and the rows of apps (1 to 4). `computers` lists your Tailscale computers
-# (only when `tailscale` is installed); `keys` lets the search find NIRUWM's
-# key bindings, which then show where the cards and computers are. A list
-# without a module leaves it out.
+# of apps, today, system, updates, media, clipboard, notifications,
+# computers, toggles, power and keys, and the rows of apps (1 to 4).
+# `clipboard` shows the newest NIRUCLIPBOARD entries (a click copies one
+# back), `notifications` what NIRUNOTIFY showed since it started,
+# `computers` your Tailscale computers (only when `tailscale` is installed);
+# `keys` lets the search find NIRUWM's key bindings. A list without a module
+# leaves it out. `search` is what the search field finds, shown in groups
+# where the cards and computers are: apps, keys, settings (the launcher's
+# settings and actions), computers, manual (topics of the NIRUX manual) and
+# files (the [files] search, from two letters on); [] finds apps only.
 # [panel]
-# modules = ["apps", "today", "system", "updates", "media", "computers",
-#            "toggles", "power", "keys"]
+# modules = ["apps", "today", "system", "updates", "media", "clipboard",
+#            "notifications", "computers", "toggles", "power", "keys"]
 # app_rows = 2
+# search = ["apps", "keys", "settings", "computers", "manual", "files"]
 #
 # The computers module. Without `hosts` it shows this computer and the
 # peers of the same Tailscale user (online first); `hosts` picks names and

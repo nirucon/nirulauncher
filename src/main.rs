@@ -63,6 +63,43 @@ use x11rb::{
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// The views that `nirulauncher --VIEW` opens.
+pub(crate) const VIEWS: [&str; 33] = [
+    "apps",
+    "actions",
+    "system-actions",
+    "windows",
+    "quick",
+    "clipboard",
+    "microphone",
+    "bluetooth",
+    "bluetooth-pair",
+    "tailscale",
+    "displays",
+    "power",
+    "keys",
+    "settings",
+    "themes",
+    "timing",
+    "input",
+    "bar",
+    "screensaver",
+    "demos",
+    "wifi",
+    "wired",
+    "sound",
+    "clip",
+    "health",
+    "agent",
+    "share",
+    "share-pair",
+    "emoji",
+    "colors",
+    "files",
+    "manual",
+    "note",
+];
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = args.first().map(String::as_str).unwrap_or("--apps");
@@ -169,47 +206,8 @@ fn main() {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                 .map(|_| ())
         }
-        "--apps" | "--actions" | "--system-actions" | "--windows" | "--quick" | "--clipboard"
-        | "--microphone" | "--bluetooth" | "--bluetooth-pair" | "--tailscale" | "--displays"
-        | "--power" | "--keys" | "--settings" | "--themes" | "--timing" | "--input" | "--bar"
-        | "--screensaver" | "--demos" | "--wifi" | "--wired" | "--sound" | "--clip"
-        | "--health" | "--agent" | "--share" | "--share-pair" | "--emoji" | "--colors"
-        | "--files" | "--manual" | "--note" => {
-            let mode = match arg {
-                "--actions" => "actions",
-                "--system-actions" => "system-actions",
-                "--windows" => "windows",
-                "--quick" => "quick",
-                "--agent" => "agent",
-                "--share" => "share",
-                "--share-pair" => "share-pair",
-                "--clipboard" => "clipboard",
-                "--microphone" => "microphone",
-                "--bluetooth" => "bluetooth",
-                "--bluetooth-pair" => "bluetooth-pair",
-                "--tailscale" => "tailscale",
-                "--displays" => "displays",
-                "--power" => "power",
-                "--keys" => "keys",
-                "--settings" => "settings",
-                "--themes" => "themes",
-                "--timing" => "timing",
-                "--input" => "input",
-                "--bar" => "bar",
-                "--screensaver" => "screensaver",
-                "--demos" => "demos",
-                "--wifi" => "wifi",
-                "--wired" => "wired",
-                "--sound" => "sound",
-                "--clip" => "clip",
-                "--health" => "health",
-                "--emoji" => "emoji",
-                "--colors" => "colors",
-                "--files" => "files",
-                "--manual" => "manual",
-                "--note" => "note",
-                _ => "apps",
-            };
+        a if a.strip_prefix("--").is_some_and(|m| VIEWS.contains(&m)) => {
+            let mode = &a[2..];
             match Ui::new(mode) {
                 Ok(ui) => run_ui(ui),
                 Err(e) => Err(e),

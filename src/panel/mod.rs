@@ -1,9 +1,12 @@
 //! NIRUPANEL: a floating panel in the middle of the screen (`Super+Space`,
 //! `nirulauncher --panel`). A retro logo, a search field over the apps with
-//! their icons, and modules: today, the system, updates, what plays, quick
-//! switches, power and the computers in the tailnet; typing also finds the
-//! NIRUWM key bindings. Which modules show, and in which order, is
-//! `[panel] modules` in `~/.config/nirulauncher/config.toml`.
+//! their icons, and modules: today, the system, updates, what plays, the
+//! clipboard, notifications, quick switches, power and the computers in the
+//! tailnet. Typing searches everything at once (`search.rs`): the apps, and
+//! in groups below them settings and actions, key bindings, computers, the
+//! manual and files. Which modules show, and in which order, is
+//! `[panel] modules` in `~/.config/nirulauncher/config.toml`; what the
+//! search finds is `[panel] search`.
 //!
 //! It is the launcher's own process and its own parts (desktop entries,
 //! ranking, usage, spawning), not a second launcher. Every source is local
@@ -11,13 +14,17 @@
 //! once and the modules fill in.
 mod data;
 mod icons;
+mod search;
 mod wrap;
+
+pub(crate) use search::SEARCH;
 
 use crate::config::Config;
 use crate::render::Renderer;
 use crate::tailscale::Device;
 use crate::*;
 use data::Toggle;
+use search::{Group, Source};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -25,25 +32,47 @@ use wrap::{fit, together, wrap};
 use x11rb::protocol::xproto::*;
 
 /// The modules there are, in their default order. `keys` is not drawn on
-/// its own: while the search finds key bindings they take the place of the
-/// cards and the computers.
-pub(crate) const MODULES: [&str; 9] = [
+/// its own: it lets the search find key bindings.
+pub(crate) const MODULES: [&str; 11] = [
     "apps",
     "today",
     "system",
     "updates",
     "media",
+    "clipboard",
+    "notifications",
     "computers",
     "toggles",
     "power",
     "keys",
 ];
 
-/// The modules below the apps that found key bindings stand in for.
-const BODY: [&str; 5] = ["today", "system", "updates", "media", "computers"];
+/// The modules drawn as cards, in a grid.
+const CARDS: [&str; 6] = [
+    "today",
+    "system",
+    "updates",
+    "media",
+    "clipboard",
+    "notifications",
+];
 
-/// The most key bindings one search keeps.
-const KEY_RESULTS: usize = 40;
+/// The modules below the apps that search results stand in for.
+const BODY: [&str; 7] = [
+    "today",
+    "system",
+    "updates",
+    "media",
+    "clipboard",
+    "notifications",
+    "computers",
+];
+
+/// Clipboard entries the clipboard card reads.
+const CLIPS: usize = 8;
+
+/// The room search results get when there is no card or computer, in lines.
+const RESULT_LINES: i32 = 12;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Power {
@@ -102,6 +131,24 @@ enum Hit {
     Computer(usize),
     /// A key binding, by its place in `keys`.
     Key(usize),
+    /// A setting or action the search found, by its place in `settings`.
+    Setting(usize),
+    /// A manual topic, by its place in `manual`.
+    Manual(usize),
+    /// A file the search found, by its place in the file rows.
+    File(usize),
+    /// A clipboard entry on the clipboard card.
+    Clip(usize),
+    /// The clipboard card: the launcher's clipboard view.
+    Clipboard,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FileAction {
+    Open,
+    /// The folder it is in, in the file manager.
+    Folder,
+    CopyPath,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,7 +171,19 @@ fn group_of(hit: Hit) -> u8 {
         Hit::Key(_) => 4,
         Hit::Toggle(_) => 5,
         Hit::Power(_) => 6,
+        Hit::Setting(_) => 7,
+        Hit::Manual(_) => 8,
+        Hit::File(_) => 9,
+        Hit::Clip(_) | Hit::Clipboard => 10,
     }
+}
+
+/// Targets in the search results (two columns: left and right move across).
+fn is_result(hit: Hit) -> bool {
+    matches!(
+        hit,
+        Hit::Setting(_) | Hit::Key(_) | Hit::Manual(_) | Hit::File(_)
+    )
 }
 
 /// What the workers send back.
@@ -136,7 +195,10 @@ enum Msg {
     Icon(String, Option<icons::Picture>),
     System(data::System),
     Computers(std::result::Result<Vec<Device>, String>),
-    Keys(Vec<Item>),
+    /// The rows of a search group, read once.
+    Rows(Group, Vec<Item>),
+    Clips(Vec<Item>),
+    Notices(std::result::Result<data::Notices, String>),
 }
 
 struct Panel {
@@ -179,11 +241,24 @@ struct Panel {
     computer_rows: usize,
     /// Computers in a row, as last drawn (for Up and Down).
     computer_cols: usize,
+    /// What the search finds besides apps (`[panel] search`).
+    search: Vec<String>,
     /// NIRUWM's key bindings, read once on the first search.
-    keys: Option<Vec<Item>>,
-    keys_asked: bool,
-    /// The key bindings the search found, best first.
-    key_shown: Vec<usize>,
+    keys: Source,
+    /// The launcher's settings and actions, read once on the first search.
+    settings: Source,
+    /// The manual's chapters and headings, read once on the first search.
+    manual: Source,
+    /// The computers as rows to search (row `k` is computer `k`).
+    computer_rows_found: Source,
+    /// The file search (the Files view's), on a worker a newer query cancels.
+    files: crate::modes::files::State,
+    /// When the search last changed, for `NIRUPANEL_DEBUG`.
+    searched: Instant,
+    /// The clipboard card's entries, newest first.
+    clips: Option<Vec<Item>>,
+    /// The notifications card.
+    notices: Option<std::result::Result<data::Notices, String>>,
     /// A key binding that ends the session or closes a window waits for a
     /// second Enter.
     confirm_key: Option<usize>,
@@ -191,6 +266,8 @@ struct Panel {
     moved: bool,
     /// `NIRUPANEL_DEBUG=hits`: every frame's targets on stderr, for tests.
     debug_hits: bool,
+    /// `NIRUPANEL_DEBUG` set: timings on stderr.
+    debug: bool,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     last_tick: Instant,
@@ -419,6 +496,20 @@ fn step_in(groups: &[u8], f: usize, sym: u32, cols: impl Fn(u8) -> usize) -> usi
     }
 }
 
+/// Whether the search finds `group` with these modules and `[panel]
+/// search`: apps, key bindings and computers need their modules too.
+fn finds(modules: &[String], search: &[String], group: &str) -> bool {
+    let on = |list: &[String], m: &str| list.iter().any(|x| x == m);
+    on(search, group) && (!matches!(group, "apps" | "keys" | "computers") || on(modules, group))
+}
+
+/// Whether the search finds anything besides apps (results below them).
+fn has_results(modules: &[String], search: &[String]) -> bool {
+    SEARCH
+        .iter()
+        .any(|g| *g != "apps" && finds(modules, search, g))
+}
+
 impl Panel {
     fn open() -> Result<Self> {
         let cfg = Config::load()?;
@@ -453,7 +544,8 @@ impl Panel {
         let mut computer_rows = cfg.panel.computer_rows;
         // Tall enough for every module; on a small screen fewer rows of
         // computers, then of apps.
-        let mut h = Self::height_for(&modules, app_rows, computer_rows, line, advance, w);
+        let results = has_results(&modules, &cfg.panel.search);
+        let mut h = Self::height_for(&modules, app_rows, computer_rows, line, advance, w, results);
         while h > i32::from(monitor.h) - i32::from(line) * 2 && (app_rows > 1 || computer_rows > 1)
         {
             if computer_rows > 1 {
@@ -461,7 +553,7 @@ impl Panel {
             } else {
                 app_rows -= 1;
             }
-            h = Self::height_for(&modules, app_rows, computer_rows, line, advance, w);
+            h = Self::height_for(&modules, app_rows, computer_rows, line, advance, w, results);
         }
         let h = h.min(i32::from(monitor.h) - 8).max(200) as u16;
         let x = monitor.x + (monitor.w as i16 - w as i16) / 2;
@@ -570,6 +662,7 @@ impl Panel {
             });
         }
         let keymap = Keymap::load(&c);
+        let cfg_search = cfg.panel.search.clone();
         let mut p = Self {
             c,
             root,
@@ -608,12 +701,19 @@ impl Panel {
             computers: None,
             computer_rows,
             computer_cols: 1,
-            keys: None,
-            keys_asked: false,
-            key_shown: Vec::new(),
+            search: cfg_search,
+            keys: Source::default(),
+            settings: Source::default(),
+            manual: Source::default(),
+            computer_rows_found: Source::default(),
+            files: Default::default(),
+            searched: Instant::now(),
+            clips: None,
+            notices: None,
             confirm_key: None,
             moved: false,
             debug_hits: std::env::var_os("NIRUPANEL_DEBUG").is_some_and(|v| v == "hits"),
+            debug: std::env::var_os("NIRUPANEL_DEBUG").is_some(),
             tx,
             rx,
             last_tick: Instant::now(),
@@ -634,10 +734,13 @@ impl Panel {
         self.modules.iter().any(|m| m == module)
     }
 
-    /// Cards in a row for the panel's width.
+    /// Cards in a row for the panel's width: as many as fit, and the rows
+    /// as even as they can be (six cards where four fit: three and three).
     fn card_columns(w: u16, advance: i16, cards: usize) -> usize {
         let fit = (i32::from(w) / (i32::from(advance) * 26)).max(1) as usize;
-        fit.min(cards).max(1)
+        let cards = cards.max(1);
+        let rows = cards.div_ceil(fit);
+        cards.div_ceil(rows).max(1)
     }
 
     fn height_for(
@@ -647,6 +750,7 @@ impl Panel {
         line: i16,
         advance: i16,
         w: u16,
+        results: bool,
     ) -> i32 {
         let lh = i32::from(line);
         let pad = lh;
@@ -655,7 +759,7 @@ impl Panel {
         if has("apps") {
             h += Self::tile_height(lh) * app_rows as i32 + pad;
         }
-        h += Self::body_height(modules, computer_rows, line, advance, w);
+        h += Self::body_height(modules, computer_rows, line, advance, w, results);
         for m in ["toggles", "power"] {
             if has(m) {
                 h += lh * 2 + pad / 2;
@@ -665,22 +769,21 @@ impl Panel {
     }
 
     /// The height of the cards and the computers (or, while searching, of
-    /// the key bindings in their place).
+    /// the results in their place). Without them, search results get room
+    /// of their own.
     fn body_height(
         modules: &[String],
         computer_rows: usize,
         line: i16,
         advance: i16,
         w: u16,
+        results: bool,
     ) -> i32 {
         let lh = i32::from(line);
         let gap = lh / 2;
         let has = |m: &str| modules.iter().any(|x| x == m);
         let mut h = 0;
-        let cards = ["today", "system", "updates", "media"]
-            .iter()
-            .filter(|m| has(m))
-            .count();
+        let cards = CARDS.iter().filter(|m| has(m)).count();
         if cards > 0 {
             let cols = Self::card_columns(w, advance, cards);
             let rows = cards.div_ceil(cols) as i32;
@@ -689,15 +792,15 @@ impl Panel {
         if has("computers") {
             h += Self::computers_height(lh, computer_rows) + gap;
         }
-        if h == 0 && has("keys") {
-            h = Self::keys_height(lh);
+        if h == 0 && results {
+            h = Self::results_height(lh);
         }
         h
     }
 
-    /// The room key bindings get when there is no card or computer.
-    fn keys_height(lh: i32) -> i32 {
-        lh * 9
+    /// The room search results get when there is no card or computer.
+    fn results_height(lh: i32) -> i32 {
+        lh * RESULT_LINES
     }
 
     /// One computer: its name and two lines about it.
@@ -754,6 +857,21 @@ impl Panel {
                 let _ = tx.send(Msg::Computers(list));
             });
         }
+        if self.has("clipboard") {
+            // NIRUCLIPBOARD's history file, as the clipboard view reads it.
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let mut clips = crate::modes::actions::clipboard_items();
+                clips.truncate(CLIPS);
+                let _ = tx.send(Msg::Clips(clips));
+            });
+        }
+        if self.has("notifications") {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Msg::Notices(data::notifications()));
+            });
+        }
         if self.has("toggles") {
             for t in Toggle::ALL {
                 let tx = self.tx.clone();
@@ -781,50 +899,95 @@ impl Panel {
         });
     }
 
+    fn finds(&self, group: &str) -> bool {
+        finds(&self.modules, &self.search, group)
+    }
+
     fn refilter(&mut self) {
         let q = self.query.trim().to_string();
-        let order = ranked_for_mode(&self.items, &q, &self.usage, "apps").order;
-        self.shown = order;
+        let t = Instant::now();
+        // Apps left out of `[panel] search` step aside while searching.
+        self.shown = if self.finds("apps") || q.is_empty() {
+            ranked_for_mode(&self.items, &q, &self.usage, "apps").order
+        } else {
+            Vec::new()
+        };
         self.focus = 0;
         self.confirm = None;
+        self.confirm_key = None;
         self.moved = false;
-        self.filter_keys();
+        self.searched = Instant::now();
+        self.filter_results();
+        if self.debug && !q.is_empty() {
+            eprintln!(
+                "nirupanel: search '{q}' ranked in {} us",
+                t.elapsed().as_micros()
+            );
+        }
     }
 
-    /// The key bindings that match the search. The first search reads them
-    /// (`niructl keys --json`, on a worker); they are kept while the panel
-    /// is open.
-    fn filter_keys(&mut self) {
-        self.key_shown.clear();
-        self.confirm_key = None;
+    /// What the search finds below the apps. The first search starts the
+    /// workers that read the key bindings, the settings and the manual;
+    /// every search starts a file search (two letters or more) that a newer
+    /// one cancels. Nothing here waits.
+    fn filter_results(&mut self) {
         let q = self.query.trim().to_string();
-        if q.is_empty() || !self.has("keys") {
+        if q.is_empty() {
+            for s in [
+                &mut self.keys,
+                &mut self.settings,
+                &mut self.manual,
+                &mut self.computer_rows_found,
+            ] {
+                s.shown.clear();
+            }
+            self.files.reset();
             return;
         }
-        match &self.keys {
-            Some(items) => {
-                let mut order = ranked_for_mode(items, &q, &self.usage, "keys").order;
-                order.truncate(KEY_RESULTS);
-                self.key_shown = order;
+        for g in Group::NEAR {
+            if !self.finds(g.name()) {
+                continue;
             }
-            None if !self.keys_asked => {
-                self.keys_asked = true;
+            let usage = &self.usage;
+            let source = match g {
+                Group::Keys => &mut self.keys,
+                Group::Settings => &mut self.settings,
+                Group::Manual => &mut self.manual,
+                _ => &mut self.computer_rows_found,
+            };
+            source.filter(&q, usage, g);
+            if g != Group::Computers && source.ask() {
                 let tx = self.tx.clone();
+                let cfg = self.cfg.clone();
                 std::thread::spawn(move || {
-                    let items = crate::modes::keys::keys_items()
-                        .into_iter()
-                        .filter(|i| i.key != "shortcut:none")
-                        .collect();
-                    let _ = tx.send(Msg::Keys(items));
+                    let rows = match g {
+                        Group::Keys => search::key_items(),
+                        Group::Settings => search::settings_items(&cfg),
+                        _ => search::manual_items(),
+                    };
+                    let _ = tx.send(Msg::Rows(g, rows));
                 });
             }
-            None => {}
+        }
+        if self.finds("files") && q.chars().count() >= 2 {
+            self.files.request(&self.cfg.files, &q);
+        } else {
+            self.files.reset();
         }
     }
 
-    /// Whether key bindings stand in for the cards and computers now.
-    fn showing_keys(&self) -> bool {
-        !self.key_shown.is_empty() && !self.query.trim().is_empty()
+    fn source(&self, g: Group) -> &Source {
+        match g {
+            Group::Keys => &self.keys,
+            Group::Settings => &self.settings,
+            Group::Manual => &self.manual,
+            _ => &self.computer_rows_found,
+        }
+    }
+
+    /// Whether search results stand in for the cards and computers now.
+    fn showing_results(&self) -> bool {
+        !self.query.trim().is_empty() && has_results(&self.modules, &self.search)
     }
 
     /// The icon of an app: `Some(true)` drawn, `Some(false)` none (a
@@ -1045,18 +1208,12 @@ impl Panel {
         )?;
         let b = self.baseline(field.y, i32::from(field.height));
         if self.query.is_empty() {
-            let hint = if self.has("apps") && self.has("keys") {
-                "Type to find an app or a key binding · Tab moves · Esc closes"
-            } else if self.has("apps") {
-                "Type to find an app · Tab moves · Esc closes"
-            } else {
-                "Tab moves · Enter chooses · Esc closes"
-            };
+            let hint = self.hint();
             self.text(field.x + 10, b, "›", pal.warning, pal.surface, adv * 2)?;
             self.text(
                 field.x + 10 + adv as i16 * 2,
                 b,
-                hint,
+                &hint,
                 pal.muted,
                 pal.surface,
                 i32::from(field.width) - 20,
@@ -1074,48 +1231,47 @@ impl Panel {
         }
         y += lh * 2 + pad;
         let modules = self.modules.clone();
-        let keys = self.showing_keys();
+        let searching = self.showing_results();
         let has_body = modules.iter().any(|m| BODY.contains(&m.as_str()));
+        let own_room = !has_body && has_results(&modules, &self.search);
         let body = Self::body_height(
             &modules,
             self.computer_rows,
             self.r.line_height,
             self.r.advance,
             self.w,
+            own_room,
         );
+        // Without cards or computers the results get room of their own,
+        // below the apps (or at the top without them).
+        let mut results_done = !own_room;
         let mut cards_done = false;
         let mut body_done = false;
+        if own_room && !self.has("apps") {
+            results_done = true;
+            y = self.draw_results_room(y, body, pad, searching)?;
+        }
         for m in &modules {
             match m.as_str() {
-                "apps" => y = self.draw_apps(y, pad)?,
-                // Found key bindings take the place of the cards and the
-                // computers, at the first of them, in the same height.
-                b if keys && BODY.contains(&b) => {
-                    if !std::mem::replace(&mut body_done, true) {
-                        y = self.draw_keys(y, body, pad)?;
+                "apps" => {
+                    y = self.draw_apps(y, pad)?;
+                    if !std::mem::replace(&mut results_done, true) {
+                        y = self.draw_results_room(y, body, pad, searching)?;
                     }
                 }
-                "today" | "system" | "updates" | "media" if !cards_done => {
-                    cards_done = true;
-                    y = self.draw_cards(y, pad)?;
+                // Search results take the place of the cards and the
+                // computers, at the first of them, in the same height.
+                b if searching && BODY.contains(&b) => {
+                    if !std::mem::replace(&mut body_done, true) {
+                        y = self.draw_results(y, body, pad)?;
+                    }
+                }
+                c if CARDS.contains(&c) => {
+                    if !std::mem::replace(&mut cards_done, true) {
+                        y = self.draw_cards(y, pad)?;
+                    }
                 }
                 "computers" => y = self.draw_computers(y, pad)?,
-                "keys" if !has_body => {
-                    if keys {
-                        y = self.draw_keys(y, body, pad)?;
-                    } else {
-                        let b = self.baseline(y as i16, lh * 2);
-                        self.text(
-                            pad as i16,
-                            b,
-                            "Key bindings show here while you type.",
-                            pal.muted,
-                            pal.background,
-                            w - pad * 2,
-                        )?;
-                        y += body;
-                    }
-                }
                 "toggles" => y = self.draw_toggles(y, pad)?,
                 "power" => y = self.draw_power(y, pad)?,
                 _ => {}
@@ -1126,9 +1282,9 @@ impl Panel {
         let footer = if !self.note.is_empty() {
             (self.note.clone(), pal.warning)
         } else if let Some(k) = self.confirm_key {
-            let item = &self.keys.as_ref().map(|v| v[k].clone());
-            let what = item
-                .as_ref()
+            let what = self
+                .keys
+                .get(k)
                 .map(|i| format!("{} ({})", i.name, key_label(i)))
                 .unwrap_or_default();
             (
@@ -1158,14 +1314,38 @@ impl Panel {
         } else if let Some(Hit::Key(i)) = focused {
             let runs = self
                 .keys
-                .as_ref()
-                .is_some_and(|v| !matches!(v[i].target, Target::Info));
+                .get(i)
+                .is_some_and(|v| !matches!(v.target, Target::Info));
             (
                 if runs {
                     "Enter runs the key binding · Super+/ lists every key · Esc clears".into()
                 } else {
                     "Shown only: it cannot be run from here · Super+/ lists every key".into()
                 },
+                pal.muted,
+            )
+        } else if let Some(Hit::File(_)) =
+            self.hover.or(focused).filter(|h| matches!(h, Hit::File(_)))
+        {
+            (
+                "Enter or click opens · Shift+Enter or middle-click opens its folder · Ctrl+C or right-click copies the path".into(),
+                pal.muted,
+            )
+        } else if let Some(Hit::Setting(_) | Hit::Manual(_)) = focused {
+            (
+                "Enter opens · arrows move between the groups · Esc clears".into(),
+                pal.muted,
+            )
+        } else if let Some(Hit::Clip(_)) =
+            self.hover.or(focused).filter(|h| matches!(h, Hit::Clip(_)))
+        {
+            (
+                "Enter or a click copies it back to the clipboard · a click on the title opens the history".into(),
+                pal.muted,
+            )
+        } else if self.showing_results() {
+            (
+                "Enter opens the first · arrows and Tab move · Esc clears · Enter with nothing found searches the launcher".into(),
                 pal.muted,
             )
         } else {
@@ -1218,8 +1398,10 @@ impl Panel {
         let count = (cols * self.app_rows).min(self.shown.len());
         if count == 0 {
             let b = self.baseline(y as i16, lh * 2);
-            let text = if self.showing_keys() {
-                "No app matches; the key bindings that do are below."
+            let text = if !self.finds("apps") {
+                "Apps are not searched here ([panel] search); the rest is below."
+            } else if self.showing_results() {
+                "No app matches; what else does is below."
             } else {
                 "No app matches. Enter searches the launcher."
             };
@@ -1321,7 +1503,7 @@ impl Panel {
         let cards: Vec<String> = self
             .modules
             .iter()
-            .filter(|m| matches!(m.as_str(), "today" | "system" | "updates" | "media"))
+            .filter(|m| CARDS.contains(&m.as_str()))
             .cloned()
             .collect();
         let cols = Self::card_columns(self.w, self.r.advance, cards.len());
@@ -1367,6 +1549,20 @@ impl Panel {
                         );
                         self.button(br, "Update…", Hit::Update, None)?;
                     }
+                }
+                "clipboard" => {
+                    let (x, ty) = self.card(r, "CLIPBOARD")?;
+                    self.hits.push((r, Hit::Clipboard));
+                    self.draw_clips(x, ty, inner, bottom)?;
+                }
+                "notifications" => {
+                    let title = match &self.notices {
+                        Some(Ok(n)) if n.dnd => "NOTIFICATIONS · do not disturb",
+                        _ => "NOTIFICATIONS",
+                    };
+                    let (x, ty) = self.card(r, title)?;
+                    let lines = self.notice_lines();
+                    self.lines(x, ty, inner, bottom, &lines)?;
                 }
                 _ => {
                     let (x, ty) = self.card(r, "NOW PLAYING")?;
@@ -1699,88 +1895,475 @@ impl Panel {
         Ok(y + height + gap)
     }
 
-    /// Found key bindings in a card of `area` height: the keys on the left,
-    /// what they do on up to two lines beside them.
-    fn draw_keys(&mut self, y: i32, area: i32, pad: i32) -> Result<i32> {
+    /// The search field's hint: what typing finds.
+    fn hint(&self) -> String {
+        let what: Vec<&str> = [
+            ("apps", "apps"),
+            ("files", "files"),
+            ("settings", "settings"),
+            ("keys", "key bindings"),
+            ("computers", "computers"),
+            ("manual", "the manual"),
+        ]
+        .iter()
+        .filter(|(g, _)| self.finds(g))
+        .map(|(_, w)| *w)
+        .collect();
+        match what.split_last() {
+            None => "Tab moves · Enter chooses · Esc closes".into(),
+            Some((last, [])) => format!("Type to find {last} · Tab moves · Esc closes"),
+            Some((last, rest)) => {
+                format!("Type to search {} and {last} · Esc closes", rest.join(", "))
+            }
+        }
+    }
+
+    /// The clipboard card: the newest entries, each on up to two lines; a
+    /// click copies one back.
+    fn draw_clips(&mut self, x: i16, y: i16, w: i32, bottom: i16) -> Result<()> {
         let pal = self.cfg.palette;
         let lh = i32::from(self.r.line_height);
         let adv = i32::from(self.r.advance).max(1);
-        let w = i32::from(self.w);
-        let gap = pad / 2;
-        let r = rect(pad as i16, y as i16, w - pad * 2, area - gap);
-        let found = self.key_shown.len();
-        let title = if found >= KEY_RESULTS {
-            format!("KEY BINDINGS · {found}+")
-        } else {
-            format!("KEY BINDINGS · {found}")
+        let clips = match self.clips.clone() {
+            None => return self.lines(x, y, w, bottom, &[("…".into(), pal.muted)]),
+            Some(c) if c.is_empty() => {
+                let text = "Nothing copied yet. NIRUCLIPBOARD keeps what you copy here.";
+                return self.lines(x, y, w, bottom, &[(text.into(), pal.muted)]);
+            }
+            Some(c) => c,
         };
-        let (x, ty) = self.card(r, &title)?;
-        let inner = i32::from(r.width) - 16;
-        let bottom = i32::from(r.y) + i32::from(r.height) - 4;
-        let Some(items) = self.keys.clone() else {
-            return Ok(y + area);
-        };
-        let shown = self.key_shown.clone();
-        let label_chars = shown
-            .iter()
-            .map(|&i| key_label(&items[i]).chars().count())
-            .max()
-            .unwrap_or(8)
-            .clamp(8, 24);
-        let desc_x = x + ((label_chars + 2) as i32 * adv) as i16;
-        let desc_chars = ((inner - (label_chars as i32 + 2) * adv) / adv).max(8) as usize;
         let row_h = lh + 2;
-        let mut ry = i32::from(ty);
-        let mut left = 0;
-        for (k, &i) in shown.iter().enumerate() {
-            let item = &items[i];
-            let lines = wrap(&item.name, desc_chars, 2);
-            let rh = lines.len() as i32 * row_h + 4;
-            // Keep a line for "more" when this is not the last one.
-            let reserve = if k + 1 < shown.len() { row_h } else { 0 };
-            if ry + rh > bottom - reserve {
-                left = shown.len() - k;
+        let chars = (w / adv).max(4) as usize;
+        let mut ry = i32::from(y);
+        for (k, item) in clips.iter().enumerate() {
+            let lines = wrap(&item.name, chars, 2);
+            let rh = lines.len() as i32 * row_h + 3;
+            if ry + rh > i32::from(bottom) {
                 break;
             }
-            let hit = Hit::Key(i);
-            let focused = self.targets.len() == self.focus;
-            let bg = if focused || self.hover == Some(hit) {
-                pal.selected
-            } else {
-                pal.surface
-            };
-            let row = rect(x - 4, ry as i16, inner + 8, rh - 2);
-            if focused {
-                self.fill(row, pal.accent)?;
-                self.fill(
-                    rect(row.x + 1, row.y + 1, i32::from(row.width) - 2, rh - 4),
-                    bg,
-                )?;
-            } else {
-                self.fill(row, bg)?;
-            }
-            let b = self.baseline(ry as i16 + 1, row_h);
-            let label = wrap(&key_label(item), label_chars, 1).remove(0);
-            self.text(x, b, &label, pal.warning, bg, label_chars as i32 * adv)?;
-            let colour = if matches!(item.target, Target::Info) {
-                pal.muted
-            } else {
-                pal.foreground
-            };
+            let hit = Hit::Clip(k);
+            let bg = self.row_box(rect(x - 4, ry as i16, w + 8, rh - 1), hit, pal.surface)?;
             for (n, l) in lines.iter().enumerate() {
                 let b = self.baseline((ry + 1 + n as i32 * row_h) as i16, row_h);
-                self.text(desc_x, b, l, colour, bg, desc_chars as i32 * adv)?;
+                self.text(x, b, l, pal.foreground, bg, chars as i32 * adv)?;
             }
-            self.hits.push((row, hit));
+            self.hits.push((rect(x - 4, ry as i16, w + 8, rh - 1), hit));
             self.targets.push(hit);
             ry += rh;
         }
-        if left > 0 {
-            let b = self.baseline(ry as i16, row_h);
-            let more = format!("+{left} more · type more words, or Super+/ lists every key");
-            self.text(x, b, &more, pal.muted, pal.surface, inner)?;
+        Ok(())
+    }
+
+    /// The notifications card: who and what on one line, the text below.
+    fn notice_lines(&self) -> Vec<(String, u32)> {
+        let pal = self.cfg.palette;
+        match &self.notices {
+            None => vec![("…".into(), pal.muted)],
+            Some(Err(e)) => vec![(
+                format!("{e}: notifications show here when it does"),
+                pal.muted,
+            )],
+            Some(Ok(n)) if n.list.is_empty() => {
+                vec![(
+                    "No notifications since NIRUNOTIFY started".into(),
+                    pal.muted,
+                )]
+            }
+            Some(Ok(n)) => n
+                .list
+                .iter()
+                .flat_map(|m| {
+                    let head = match (m.app.is_empty(), m.summary.is_empty()) {
+                        (false, false) => format!("{}: {}", m.app, m.summary),
+                        (true, _) => m.summary.clone(),
+                        (false, true) => m.app.clone(),
+                    };
+                    let mut out = vec![(head, pal.foreground)];
+                    if !m.body.is_empty() {
+                        out.push((m.body.clone(), pal.muted));
+                    }
+                    out
+                })
+                .collect(),
+        }
+    }
+
+    /// A row that can be chosen: its background, an accent border when it
+    /// has the focus (the next target). Returns the colour drawn under it.
+    fn row_box(&mut self, row: Rectangle, hit: Hit, base: u32) -> Result<u32> {
+        let pal = self.cfg.palette;
+        let focused = self.targets.len() == self.focus;
+        let bg = if focused || self.hover == Some(hit) {
+            pal.selected
+        } else {
+            base
+        };
+        if focused {
+            self.fill(row, pal.accent)?;
+            self.fill(
+                rect(
+                    row.x + 1,
+                    row.y + 1,
+                    i32::from(row.width) - 2,
+                    i32::from(row.height) - 2,
+                ),
+                bg,
+            )?;
+        } else {
+            self.fill(row, bg)?;
+        }
+        Ok(bg)
+    }
+
+    /// A box for results: the border and the card's surface.
+    fn boxed(&self, r: Rectangle) -> Result<()> {
+        let pal = self.cfg.palette;
+        self.fill(r, pal.border)?;
+        self.fill(
+            rect(
+                r.x + 1,
+                r.y + 1,
+                i32::from(r.width) - 2,
+                i32::from(r.height) - 2,
+            ),
+            pal.surface,
+        )
+    }
+
+    /// A group's title band inside a results box. Returns the y below it.
+    fn band(&mut self, r: Rectangle, y: i32, title: &str) -> Result<i32> {
+        let pal = self.cfg.palette;
+        let lh = i32::from(self.r.line_height);
+        let band = rect(r.x + 1, y as i16, i32::from(r.width) - 2, lh + 6);
+        self.fill(band, pal.selected)?;
+        let b = self.baseline(y as i16, lh + 6);
+        self.text(
+            r.x + 8,
+            b,
+            title,
+            pal.warning,
+            pal.selected,
+            i32::from(r.width) - 16,
+        )?;
+        Ok(y + lh + 10)
+    }
+
+    /// The room of the results when they have it to themselves: the
+    /// results while searching, else a line that says what comes there.
+    fn draw_results_room(&mut self, y: i32, area: i32, pad: i32, searching: bool) -> Result<i32> {
+        if searching {
+            return self.draw_results(y, area, pad);
+        }
+        let pal = self.cfg.palette;
+        let lh = i32::from(self.r.line_height);
+        let b = self.baseline(y as i16, lh * 2);
+        self.text(
+            pad as i16,
+            b,
+            "Settings, key bindings, files and more show here while you type.",
+            pal.muted,
+            pal.background,
+            i32::from(self.w) - pad * 2,
+        )?;
+        Ok(y + area)
+    }
+
+    /// The search results in `area`: the groups found at once on the left
+    /// (settings and actions, key bindings, computers, the manual), the
+    /// files on the right as they come in.
+    fn draw_results(&mut self, y: i32, area: i32, pad: i32) -> Result<i32> {
+        let gap = pad / 2;
+        let w = i32::from(self.w) - pad * 2;
+        let r = rect(pad as i16, y as i16, w, area - gap);
+        let files = self.finds("files");
+        let near: Vec<Group> = Group::NEAR
+            .iter()
+            .copied()
+            .filter(|g| self.finds(g.name()))
+            .collect();
+        let two = files && !near.is_empty();
+        let left_w = if two { (w - gap) * 11 / 20 } else { w };
+        if !near.is_empty() {
+            self.draw_near(rect(r.x, r.y, left_w, i32::from(r.height)), &near)?;
+        }
+        if files {
+            let (fx, fw) = if two {
+                (r.x + (left_w + gap) as i16, w - left_w - gap)
+            } else {
+                (r.x, w)
+            };
+            self.draw_files(rect(fx, r.y, fw, i32::from(r.height)))?;
         }
         Ok(y + area)
+    }
+
+    /// One result: the hit, a lead (keys, a dot) in its colour, the name
+    /// in its colour and what it is.
+    fn result_rows(&self, g: Group) -> Vec<(Hit, String, u32, String, String, u32)> {
+        let pal = self.cfg.palette;
+        let source = self.source(g);
+        let now = data::now();
+        source
+            .shown
+            .iter()
+            .filter_map(|&i| {
+                let item = source.get(i)?;
+                Some(match g {
+                    Group::Keys => (
+                        Hit::Key(i),
+                        key_label(item),
+                        pal.warning,
+                        item.name.clone(),
+                        String::new(),
+                        if matches!(item.target, Target::Info) {
+                            pal.muted
+                        } else {
+                            pal.foreground
+                        },
+                    ),
+                    Group::Computers => {
+                        let d = self.computer(i)?;
+                        let (detail, _) = computer_detail(d, now);
+                        let dot = if d.online { pal.success } else { pal.muted };
+                        (
+                            Hit::Computer(i),
+                            "●".into(),
+                            dot,
+                            d.name.clone(),
+                            detail,
+                            pal.foreground,
+                        )
+                    }
+                    Group::Settings => (
+                        Hit::Setting(i),
+                        String::new(),
+                        pal.muted,
+                        item.name.clone(),
+                        item.detail.clone(),
+                        pal.foreground,
+                    ),
+                    _ => (
+                        Hit::Manual(i),
+                        String::new(),
+                        pal.muted,
+                        item.name.clone(),
+                        item.detail.clone(),
+                        pal.foreground,
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    fn draw_near(&mut self, r: Rectangle, groups: &[Group]) -> Result<()> {
+        let pal = self.cfg.palette;
+        let lh = i32::from(self.r.line_height);
+        let adv = i32::from(self.r.advance).max(1);
+        self.boxed(r)?;
+        let x = r.x + 8;
+        let inner = i32::from(r.width) - 16;
+        let chars = (inner / adv).max(8) as usize;
+        let top = i32::from(r.y) + 1;
+        let bottom = i32::from(r.y) + i32::from(r.height) - 4;
+        let row_h = lh + 2;
+        // Each group's rows, laid out: (lead width, lines per row).
+        let mut laid = Vec::new();
+        for &g in groups {
+            let rows = self.result_rows(g);
+            let lead = rows
+                .iter()
+                .map(|r| r.1.chars().count())
+                .max()
+                .unwrap_or(0)
+                .min(18);
+            let off = if lead > 0 { lead + 2 } else { 0 };
+            let lines: Vec<Vec<(String, String)>> = rows
+                .iter()
+                .map(|r| search::row_lines(&r.3, &r.4, chars.saturating_sub(off).max(6)))
+                .collect();
+            laid.push((g, rows, off, lines));
+        }
+        let costs: Vec<Vec<i32>> = laid
+            .iter()
+            .map(|(_, _, _, lines)| lines.iter().map(|l| l.len() as i32 * row_h + 4).collect())
+            .collect();
+        let take = search::allocate(&costs, lh + 10, bottom - top);
+        if take.iter().all(|&n| n == 0) {
+            let loading = groups.iter().any(|&g| self.source(g).loading());
+            let text = if loading {
+                "Searching…".to_string()
+            } else {
+                "Nothing among the key bindings, settings, computers or the manual matches."
+                    .to_string()
+            };
+            self.lines(
+                x,
+                (top + 6) as i16,
+                inner,
+                bottom as i16,
+                &[(text, pal.muted)],
+            )?;
+            return Ok(());
+        }
+        let mut y = top;
+        for ((g, rows, off, lines), n) in laid.iter().zip(take) {
+            if n == 0 {
+                continue;
+            }
+            let found = rows.len();
+            let more = if found >= g.cap() { "+" } else { "" };
+            let title = if n < found {
+                format!("{} · {n} of {found}{more}", g.title())
+            } else {
+                format!("{} · {found}", g.title())
+            };
+            y = self.band(r, y, &title)?;
+            for (row, lines) in rows.iter().zip(lines).take(n) {
+                let (hit, lead, lead_colour, _, _, colour) = row;
+                let rh = lines.len() as i32 * row_h + 4;
+                let bg =
+                    self.row_box(rect(x - 4, y as i16, inner + 8, rh - 2), *hit, pal.surface)?;
+                if !lead.is_empty() {
+                    let b = self.baseline(y as i16 + 1, row_h);
+                    let shown = wrap(lead, off.saturating_sub(2).max(1), 1).remove(0);
+                    self.text(x, b, &shown, *lead_colour, bg, *off as i32 * adv)?;
+                }
+                let nx = x + (*off as i32 * adv) as i16;
+                for (k, (name, detail)) in lines.iter().enumerate() {
+                    let b = self.baseline((y + 1 + k as i32 * row_h) as i16, row_h);
+                    let used = name.chars().count();
+                    if !name.is_empty() {
+                        self.text(nx, b, name, *colour, bg, used as i32 * adv + adv)?;
+                    }
+                    if !detail.is_empty() {
+                        let dx = if used > 0 { used + 2 } else { 0 };
+                        self.text(
+                            nx + (dx as i32 * adv) as i16,
+                            b,
+                            detail,
+                            pal.muted,
+                            bg,
+                            inner - (*off + dx) as i32 * adv,
+                        )?;
+                    }
+                }
+                self.hits
+                    .push((rect(x - 4, y as i16, inner + 8, rh - 2), *hit));
+                self.targets.push(*hit);
+                y += rh;
+            }
+            y += 2;
+        }
+        Ok(())
+    }
+
+    /// The files the search found, as they come in: the kind, the name
+    /// and the folder it is in; at the bottom how they were found.
+    fn draw_files(&mut self, r: Rectangle) -> Result<()> {
+        let pal = self.cfg.palette;
+        let lh = i32::from(self.r.line_height);
+        let adv = i32::from(self.r.advance).max(1);
+        self.boxed(r)?;
+        let x = r.x + 8;
+        let inner = i32::from(r.width) - 16;
+        let chars = (inner / adv).max(8) as usize;
+        let row_h = lh + 2;
+        let top = i32::from(r.y) + 1;
+        let bottom = i32::from(r.y) + i32::from(r.height) - 4;
+        let busy = self.files.rx.is_some();
+        let rows: Vec<Item> = self.files.rows.clone();
+        let found = rows
+            .iter()
+            .filter(|i| !matches!(i.target, Target::Info))
+            .count();
+        let title = match (busy, found) {
+            (true, 0) => "FILES · searching…".to_string(),
+            (true, n) => format!("FILES · {n} · searching…"),
+            (false, n) => format!("FILES · {n}"),
+        };
+        let mut y = self.band(r, top, &title)?;
+        let short = self.query.trim().chars().count() < 2;
+        // The last line says how the files were found.
+        let note = if short {
+            String::new()
+        } else {
+            self.files.note.clone()
+        };
+        let end = if note.is_empty() {
+            bottom
+        } else {
+            bottom - row_h
+        };
+        if short || rows.is_empty() {
+            let text = if short {
+                "Type one more letter to search files."
+            } else if busy {
+                "Searching your files…"
+            } else {
+                "No file matches."
+            };
+            self.lines(x, y as i16, inner, end as i16, &[(text.into(), pal.muted)])?;
+        }
+        let lead = rows
+            .iter()
+            .map(|i| i.group.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(10);
+        let off = if lead > 0 { lead + 2 } else { 0 };
+        for (k, item) in rows.iter().enumerate() {
+            if matches!(item.target, Target::Info) {
+                self.lines(
+                    x,
+                    y as i16,
+                    inner,
+                    end as i16,
+                    &[(item.name.clone(), pal.muted)],
+                )?;
+                y += row_h;
+                continue;
+            }
+            let lines =
+                search::row_lines(&item.name, &item.detail, chars.saturating_sub(off).max(6));
+            let rh = lines.len() as i32 * row_h + 4;
+            if y + rh > end {
+                break;
+            }
+            let hit = Hit::File(k);
+            let bg = self.row_box(rect(x - 4, y as i16, inner + 8, rh - 2), hit, pal.surface)?;
+            let b = self.baseline(y as i16 + 1, row_h);
+            let kind = wrap(&item.group, lead.max(1), 1).remove(0);
+            self.text(x, b, &kind, pal.warning, bg, off as i32 * adv)?;
+            let nx = x + (off as i32 * adv) as i16;
+            for (n, (name, detail)) in lines.iter().enumerate() {
+                let b = self.baseline((y + 1 + n as i32 * row_h) as i16, row_h);
+                let used = name.chars().count();
+                if !name.is_empty() {
+                    self.text(nx, b, name, pal.foreground, bg, used as i32 * adv + adv)?;
+                }
+                if !detail.is_empty() {
+                    let dx = if used > 0 { used + 2 } else { 0 };
+                    self.text(
+                        nx + (dx as i32 * adv) as i16,
+                        b,
+                        detail,
+                        pal.muted,
+                        bg,
+                        inner - (off + dx) as i32 * adv,
+                    )?;
+                }
+            }
+            self.hits
+                .push((rect(x - 4, y as i16, inner + 8, rh - 2), hit));
+            self.targets.push(hit);
+            y += rh;
+        }
+        if !note.is_empty() {
+            let b = self.baseline((bottom - row_h) as i16, row_h);
+            let shown = wrap(&note, chars, 1).remove(0);
+            self.text(x, b, &shown, pal.muted, pal.surface, inner)?;
+        }
+        Ok(())
     }
 
     fn draw_toggles(&mut self, y: i32, pad: i32) -> Result<i32> {
@@ -1846,7 +2429,7 @@ impl Panel {
         match hit {
             Hit::Computer(i) => self.on_computer(i, ComputerAction::Ssh),
             Hit::Key(i) => {
-                let Some(item) = self.keys.as_ref().and_then(|v| v.get(i)).cloned() else {
+                let Some(item) = self.keys.get(i).cloned() else {
                     return true;
                 };
                 match item.target.clone() {
@@ -1882,6 +2465,20 @@ impl Panel {
                     }
                 }
             }
+            Hit::Setting(i) => match self.settings.get(i).cloned() {
+                Some(item) => self.run_item(&item),
+                None => true,
+            },
+            Hit::Manual(i) => match self.manual.get(i).cloned() {
+                Some(item) => self.run_item(&item),
+                None => true,
+            },
+            Hit::File(i) => self.on_file(i, FileAction::Open),
+            Hit::Clip(i) => match self.clips.as_ref().and_then(|c| c.get(i)).cloned() {
+                Some(item) => self.run_item(&item),
+                None => true,
+            },
+            Hit::Clipboard => self.open_view("clipboard"),
             Hit::App(i) => {
                 let item = self.items[i].clone();
                 if let Target::Spawn {
@@ -2005,6 +2602,79 @@ impl Panel {
         }
     }
 
+    /// Do what a row of the launcher does, as the launcher would. `false`
+    /// closes the panel.
+    fn run_item(&mut self, item: &Item) -> bool {
+        let done = match item.target.clone() {
+            Target::Spawn {
+                argv,
+                terminal,
+                path,
+            } => spawn_command(&argv, path.as_deref(), terminal, &self.cfg),
+            Target::Terminal { argv, hold } => spawn_terminal_command(&argv, hold, &self.cfg),
+            Target::Mode(mode) => return self.open_view(&mode),
+            Target::Copy(text) => copy_to_clipboard(&text),
+            Target::RunKey(keys) => {
+                self.close();
+                let argv = ["niructl".to_string(), "keys".into(), "run".into(), keys];
+                spawn_command(&argv, None, false, &self.cfg)
+            }
+            _ => {
+                self.note = format!("{}: open it in the launcher", item.name);
+                return true;
+            }
+        };
+        match done {
+            Ok(()) => {
+                record_usage(&item.key);
+                false
+            }
+            Err(e) => {
+                self.note = e;
+                true
+            }
+        }
+    }
+
+    /// Open a view of the launcher (`nirulauncher --VIEW`). The panel lets
+    /// go of the keyboard first, so the launcher can take it.
+    fn open_view(&mut self, mode: &str) -> bool {
+        let Some(flag) = search::view_flag(mode) else {
+            self.note = format!("The launcher has no view {mode}");
+            return true;
+        };
+        self.close();
+        if let Err(e) = spawn_command(&["nirulauncher".into(), flag], None, false, &self.cfg) {
+            eprintln!("nirupanel: {e}");
+        }
+        false
+    }
+
+    /// Open a file the search found, the folder it is in, or copy its path.
+    /// `false` closes the panel.
+    fn on_file(&mut self, i: usize, what: FileAction) -> bool {
+        let Some(item) = self.files.rows.get(i).cloned() else {
+            return true;
+        };
+        let Some(path) = item.key.strip_prefix(crate::modes::files::KEY_PREFIX) else {
+            return true;
+        };
+        match what {
+            FileAction::Open => self.run_item(&item),
+            FileAction::Folder => {
+                let folder = crate::modes::files::parent_of(path);
+                self.spawn(&["xdg-open", &folder])
+            }
+            FileAction::CopyPath => {
+                self.note = match copy_to_clipboard(path) {
+                    Ok(()) => format!("Copied {path}"),
+                    Err(e) => e,
+                };
+                true
+            }
+        }
+    }
+
     fn spawn(&mut self, argv: &[&str]) -> bool {
         let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
         match spawn_command(&argv, None, false, &self.cfg) {
@@ -2030,13 +2700,47 @@ impl Panel {
         let tw = (isz + lh * 2).max(i32::from(self.r.advance) * 11);
         let app_cols = ((i32::from(self.w) - lh * 2) / tw).max(1) as usize;
         let f = self.focus.min(n - 1);
+        let searching = self.showing_results();
+        // Left and right cross the two columns of search results.
+        if matches!(sym, 0xff51 | 0xff53) {
+            let here = self.targets[f];
+            if is_result(here) || (searching && matches!(here, Hit::Computer(_))) {
+                if let Some(k) = self.across(here, sym == 0xff53) {
+                    self.focus = k;
+                    return;
+                }
+            }
+        }
         let groups: Vec<u8> = self.targets.iter().map(|t| group_of(*t)).collect();
         self.focus = step_in(&groups, f, sym, |g| match g {
             0 => app_cols,
+            3 if searching => 1,
             3 => self.computer_cols.max(1),
-            4 => 1,
+            4 | 7..=10 => 1,
             _ => 0,
         });
+    }
+
+    /// The result in the other column nearest to `from`, to the right or
+    /// to the left.
+    fn across(&self, from: Hit, right: bool) -> Option<usize> {
+        let at = |h: Hit| self.hits.iter().find(|(_, x)| *x == h).map(|(r, _)| *r);
+        let a = at(from)?;
+        let mid = |r: Rectangle| i32::from(r.y) + i32::from(r.height) / 2;
+        self.targets
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| is_result(**h) || matches!(h, Hit::Computer(_)))
+            .filter_map(|(k, h)| Some((k, at(*h)?)))
+            .filter(|(_, r)| {
+                if right {
+                    r.x >= a.x + a.width as i16
+                } else {
+                    r.x + r.width as i16 <= a.x
+                }
+            })
+            .min_by_key(|(_, r)| (mid(*r) - mid(a)).abs())
+            .map(|(k, _)| k)
     }
 
     fn key(&mut self, e: KeyPressEvent) -> Result<bool> {
@@ -2047,14 +2751,25 @@ impl Panel {
         let focused = self.targets.get(self.focus).copied();
         match sym {
             // Ctrl+C copies a computer's address, Ctrl+Shift+C its name.
-            0x63 | 0x43 if ctrl => {
-                if let Some(Hit::Computer(i)) = focused {
+            0x63 | 0x43 if ctrl => match focused {
+                Some(Hit::Computer(i)) => {
                     let what = if shift {
                         ComputerAction::CopyName
                     } else {
                         ComputerAction::CopyIp
                     };
                     self.on_computer(i, what);
+                }
+                Some(Hit::File(i)) => {
+                    self.on_file(i, FileAction::CopyPath);
+                }
+                _ => {}
+            },
+            0xff0d | 0xff8d if shift && matches!(focused, Some(Hit::File(_))) => {
+                if let Some(Hit::File(i)) = focused {
+                    if !self.on_file(i, FileAction::Folder) {
+                        return Ok(false);
+                    }
                 }
             }
             0xff0d | 0xff8d if shift && matches!(focused, Some(Hit::Computer(_))) => {
@@ -2077,8 +2792,13 @@ impl Panel {
                 // While searching, Enter takes what the search found (an
                 // app, a key binding), or the target moved to by hand.
                 let searching = !self.query.trim().is_empty();
-                let hit = focused
-                    .filter(|h| !searching || self.moved || matches!(h, Hit::App(_) | Hit::Key(_)));
+                let hit = focused.filter(|h| {
+                    !searching
+                        || self.moved
+                        || matches!(h, Hit::App(_))
+                        || is_result(*h)
+                        || (self.showing_results() && matches!(h, Hit::Computer(_)))
+                });
                 if let Some(hit) = hit {
                     if !self.activate(hit) {
                         return Ok(false);
@@ -2149,16 +2869,50 @@ impl Panel {
                         self.system = Some(sys);
                         self.system_busy = false;
                     }
-                    Msg::Computers(list) => self.computers = Some(list),
-                    Msg::Keys(items) => {
-                        self.keys = Some(items);
-                        self.filter_keys();
+                    Msg::Computers(list) => {
+                        if let Ok(l) = &list {
+                            self.computer_rows_found.items = Some(search::computer_items(l));
+                        }
+                        self.computers = Some(list);
+                        self.filter_results();
                     }
+                    Msg::Rows(g, rows) => {
+                        match g {
+                            Group::Keys => self.keys.items = Some(rows),
+                            Group::Settings => self.settings.items = Some(rows),
+                            _ => self.manual.items = Some(rows),
+                        }
+                        self.filter_results();
+                        if self.debug && !self.query.trim().is_empty() {
+                            eprintln!(
+                                "nirupanel: {} ready {} ms after the search changed",
+                                g.name(),
+                                self.searched.elapsed().as_millis()
+                            );
+                        }
+                    }
+                    Msg::Clips(c) => self.clips = Some(c),
+                    Msg::Notices(n) => self.notices = Some(n),
                     Msg::Icon(key, p) => {
                         self.pending.remove(&key);
                         self.pictures.insert(key, p);
                     }
                 }
+            }
+            if self.files.poll() {
+                dirty = true;
+                if self.debug {
+                    eprintln!(
+                        "nirupanel: files for '{}' shown {} ms after the search changed ({})",
+                        self.query.trim(),
+                        self.searched.elapsed().as_millis(),
+                        self.files.note
+                    );
+                }
+            }
+            if self.files.partial && self.files.rx.is_none() && !crate::modes::files::walk_running()
+            {
+                self.files.again(&self.cfg.files);
             }
             // The system figures and the clock every two seconds, what plays
             // every three, only while the panel is open.
@@ -2203,6 +2957,20 @@ impl Panel {
                         let other = match (e.detail, hit) {
                             (2, Some(Hit::Computer(i))) => Some((i, ComputerAction::Files)),
                             (3, Some(Hit::Computer(i))) => Some((i, ComputerAction::CopyIp)),
+                            // A file: the middle button opens its folder,
+                            // the right one copies its path.
+                            (2 | 3, Some(Hit::File(i))) => {
+                                let what = if e.detail == 2 {
+                                    FileAction::Folder
+                                } else {
+                                    FileAction::CopyPath
+                                };
+                                if !self.on_file(i, what) {
+                                    return Ok(());
+                                }
+                                self.draw()?;
+                                continue;
+                            }
                             (1, _) => None,
                             _ => continue,
                         };
@@ -2247,8 +3015,14 @@ impl Panel {
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // While a search is out, look for its answer often.
+            let waiting = self.files.rx.is_some()
+                || [&self.keys, &self.settings, &self.manual]
+                    .iter()
+                    .any(|s| s.loading());
+            let wait = if waiting { 15 } else { 250 };
             // SAFETY: one valid pollfd.
-            unsafe { libc::poll(&mut pfd, 1, 250) };
+            unsafe { libc::poll(&mut pfd, 1, wait) };
         }
     }
 }
@@ -2286,6 +3060,24 @@ mod tests {
         assert_eq!(c.panel.computer_rows, 1);
         assert!(cfg("").panel.computer_hosts.is_empty());
         assert_eq!(cfg("").panel.computer_rows, 2);
+        assert_eq!(cfg("").panel.search, SEARCH);
+        let c = cfg("[panel]\nsearch = [\"Files\", \"apps\", \"web\", \"files\"]");
+        assert_eq!(c.panel.search, ["files", "apps"]);
+        assert_eq!(cfg("[panel]\nsearch = []").panel.search, ["apps"]);
+    }
+
+    #[test]
+    fn the_search_finds_what_its_modules_allow() {
+        let v = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let all = v(&SEARCH);
+        assert!(has_results(&v(&["apps"]), &all));
+        assert!(finds(&v(&["apps"]), &all, "files"));
+        // Key bindings and computers need their modules.
+        assert!(!finds(&v(&["apps"]), &all, "keys"));
+        assert!(!finds(&v(&["apps"]), &all, "computers"));
+        assert!(finds(&v(&["keys"]), &all, "keys"));
+        assert!(!has_results(&v(&["apps", "keys"]), &v(&["apps"])));
+        assert!(has_results(&v(&["keys"]), &v(&["keys"])));
     }
 
     #[test]
@@ -2300,21 +3092,29 @@ mod tests {
     #[test]
     fn the_panel_fits_its_modules() {
         let all: Vec<String> = MODULES.iter().map(|s| s.to_string()).collect();
-        let tall = Panel::height_for(&all, 2, 2, 19, 9, 1000);
-        let short = Panel::height_for(&all, 1, 2, 19, 9, 1000);
+        let h = |m: &[String], apps, comps, results| {
+            Panel::height_for(m, apps, comps, 19, 9, 1000, results)
+        };
+        let tall = h(&all, 2, 2, true);
+        let short = h(&all, 1, 2, true);
         assert!(tall > short);
-        assert!(Panel::height_for(&all, 1, 1, 19, 9, 1000) < short);
+        assert!(h(&all, 1, 1, true) < short);
+        // With cards, the results take their place: no room of their own.
+        assert_eq!(h(&all, 2, 2, false), tall);
         let none: Vec<String> = vec!["power".into()];
-        assert!(Panel::height_for(&none, 2, 2, 19, 9, 1000) < short);
-        // Key bindings get room of their own without cards or computers.
-        let keys: Vec<String> = vec!["power".into(), "keys".into()];
+        assert!(h(&none, 2, 2, false) < short);
+        // Search results get room of their own without cards or computers.
         assert_eq!(
-            Panel::height_for(&keys, 2, 2, 19, 9, 1000),
-            Panel::height_for(&none, 2, 2, 19, 9, 1000) + Panel::keys_height(19)
+            h(&none, 2, 2, true),
+            h(&none, 2, 2, false) + Panel::results_height(19)
         );
+        // Six cards where four fit: two rows of three.
         assert_eq!(Panel::card_columns(1000, 9, 4), 4);
-        assert_eq!(Panel::card_columns(720, 9, 4), 3);
+        assert_eq!(Panel::card_columns(1000, 9, 6), 3);
+        assert_eq!(Panel::card_columns(1000, 9, 5), 3);
+        assert_eq!(Panel::card_columns(720, 9, 4), 2);
         assert_eq!(Panel::card_columns(400, 9, 4), 1);
+        assert_eq!(Panel::card_columns(400, 9, 0), 1);
         // A card holds six lines of text below its title, four above its
         // buttons.
         for lh in [15, 19, 24, 30] {

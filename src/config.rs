@@ -50,6 +50,8 @@ pub struct PanelConfig {
     pub computer_hide: Vec<String>,
     /// `[panel.computers] rows`: rows of computers, 1 to 4.
     pub computer_rows: usize,
+    /// `[panel] search`: what the search field finds, in groups.
+    pub search: Vec<String>,
 }
 
 impl Default for PanelConfig {
@@ -63,6 +65,7 @@ impl Default for PanelConfig {
             computer_hosts: Vec::new(),
             computer_hide: Vec::new(),
             computer_rows: 2,
+            search: crate::panel::SEARCH.iter().map(|m| m.to_string()).collect(),
         }
     }
 }
@@ -85,6 +88,20 @@ fn panel_from(v: &toml::Value) -> PanelConfig {
         if !modules.is_empty() {
             panel.modules = modules;
         }
+    }
+    if let Some(list) = array(table, "search") {
+        let mut search: Vec<String> = Vec::new();
+        for m in list {
+            let m = m.trim().to_lowercase();
+            if crate::panel::SEARCH.contains(&m.as_str()) && !search.contains(&m) {
+                search.push(m);
+            }
+        }
+        // An empty list finds apps only; unknown names are left out.
+        if search.is_empty() {
+            search.push("apps".into());
+        }
+        panel.search = search;
     }
     if let Some(n) = table.get("app_rows").and_then(|x| x.as_integer()) {
         panel.app_rows = n.clamp(1, 4) as usize;

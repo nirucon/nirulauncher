@@ -10,6 +10,11 @@
 # 4. Typing finds key bindings (`niructl keys --json`, read once); Enter
 #    runs one through `niructl keys run`; one that closes a window asks first.
 # 5. Without the modules, or without Tailscale, nothing is run for them.
+# 6. The search finds files (Enter opens one, a right click copies its
+#    path) and settings (Enter opens the launcher's view); Esc clears, then
+#    closes.
+# 7. The clipboard card shows NIRUCLIPBOARD's history; a click copies an
+#    entry back.
 #
 # Usage: panel.sh BIN
 set -eu
@@ -28,7 +33,12 @@ trap cleanup EXIT INT TERM
 fail() { echo "FAIL $*"; [ ! -f "$T/err" ] || tail -c 3000 "$T/err"; exit 1; }
 
 mkdir -p "$T/bin" "$T/bin-plain" "$T/home/.config/nirulauncher" "$T/data/applications" \
-  "$T/sysdata" "$T/state" "$T/cache" "$T/run"
+  "$T/sysdata" "$T/state/niru" "$T/cache" "$T/run" "$T/home/Documents"
+: > "$T/home/Documents/zebra-report.txt"
+cat > "$T/state/niru/clipboard.json" <<'JSON'
+[{"id": 31, "text": "the newest copied text", "time": 1764100000},
+ {"id": 30, "text": "an older one", "time": 1764000000}]
+JSON
 chmod 0700 "$T/run"
 printf '[Desktop Entry]\nType=Application\nName=Paint fixture\nExec=true\n' \
   > "$T/data/applications/paint.desktop"
@@ -49,6 +59,8 @@ log_stub tailscale 'sleep "${TS_SLEEP:-0}"; cat "'"$T"'/status.json"'
 log_stub niructl 'case "$1 $2" in "keys --json") cat "'"$T"'/keys.json";; "keys run") ;; *) exit 1;; esac'
 log_stub fake-term ''
 log_stub xdg-open ''
+log_stub nirulauncher ''
+log_stub niruclipboard ''
 log_stub xclip 'cat >> "'"$T"'/clipboard"; printf "\n" >> "'"$T"'/clipboard"'
 cp "$T/bin/niructl" "$T/bin-plain/niructl"
 cp "$T/bin/fake-term" "$T/bin-plain/fake-term"
@@ -160,7 +172,7 @@ last_frame | tr ' ' '\n' | grep '@' | awk -F'@' -v frame="$(last_frame | sed 's/
   END {
     for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) {
       # Cards (Today, System) hold their own buttons; others must not meet.
-      if (name[i] ~ /^(Today|System)$/ || name[j] ~ /^(Today|System)$/) continue
+      if (name[i] ~ /^(Today|System|Clipboard)$/ || name[j] ~ /^(Today|System|Clipboard)$/) continue
       if (x[i] < x[j] + w[j] && x[j] < x[i] + w[i] && y[i] < y[j] + h[j] && y[j] < y[i] + h[i]) {
         print "overlap: " name[i] " " name[j]; bad = 1 }
     }
@@ -211,6 +223,40 @@ xdotool key Return
 closed "confirmed key binding"
 grep -qx 'keys run super+q' "$T/niructl.log" || fail "the confirmed key binding did not run"
 echo "PASS a key binding that closes a window asks once more"
+
+# 6: files and settings in the search; Esc clears, then closes.
+open_panel "$FULL_PATH"
+xdotool key z e b r a
+wait_frame 'File\(0\)'
+click 3 'File(0)'
+wait_log clipboard "$T/home/Documents/zebra-report.txt"
+kill -0 "$PANEL" 2>/dev/null || fail "copying a path closed the panel"
+xdotool key Return
+closed "Enter on a file"
+grep -qx "$T/home/Documents/zebra-report.txt" "$T/xdg-open.log" || fail "the file was not opened: $(cat "$T/xdg-open.log")"
+echo "PASS the search finds a file: a right click copies its path, Enter opens it"
+
+open_panel "$FULL_PATH"
+xdotool key d i s p l a y s
+wait_frame 'Setting\('
+xdotool key Escape
+wait_frame 'focus Some\(App'
+kill -0 "$PANEL" 2>/dev/null || fail "the first Esc closed the panel"
+last_frame | grep -q 'Setting(' && fail "Esc did not clear the search"
+xdotool key d i s p l a y s
+wait_frame 'Setting\('
+xdotool key Return
+closed "Enter on a setting"
+grep -qx -- '--displays' "$T/nirulauncher.log" || fail "the Displays view did not open: $(cat "$T/nirulauncher.log")"
+echo "PASS the search finds a setting and Enter opens its view; Esc clears first"
+
+# 7: the clipboard card.
+open_panel "$FULL_PATH"
+wait_frame 'Clip\(1\)'
+click 1 'Clip(0)'
+closed "a clipboard entry"
+grep -qx 'copy 31' "$T/niruclipboard.log" || fail "the entry was not copied back"
+echo "PASS the clipboard card copies an entry back"
 
 # 5: the modules left out, or no Tailscale: nothing runs for them.
 : > "$T/tailscale.log"

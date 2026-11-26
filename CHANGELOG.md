@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.23.0 (2026-11-26)
+
+- **One search for everything in NIRUPANEL.** The field at the top now
+  searches apps, key bindings, settings and actions, computers, manual
+  topics and files at once. The apps stay in the tiles at the top; the rest
+  shows in groups with a title and a count where the cards and computers
+  are: key bindings, settings and actions, computers and the manual on the
+  left, files on the right. Every group reuses the launcher's own rows and
+  ranking (the Actions view's settings and actions that the panel can open,
+  `niructl keys --json`, the Manual view's chapters and headings, the Files
+  view's search). Nothing is read before the first letter; each source is
+  then read once on a worker. Files are searched from two letters on, on a
+  worker that a newer letter cancels, with a time limit and a cap on rows,
+  and fill in their column as they come, with how many and how they were
+  found on its last line. Up and Down move through a group and on to the
+  next, Left and Right cross the columns, Enter or a click opens (a
+  setting's view or action, a manual topic in `nirux manual`, a file);
+  Shift+Enter or a middle click opens a file's folder, Ctrl+C or a right
+  click copies its path. Esc clears the search, then closes. Long names and
+  descriptions wrap onto a second line, with what a row is beside its name
+  when it fits.
+- `[panel] search` chooses the groups: `apps`, `keys`, `settings`,
+  `computers`, `manual` and `files` (all by default; `[]` finds apps only).
+  Key bindings and computers also need their modules. Without cards or
+  computers the results get room of their own below the apps.
+- **Clipboard card** (module `clipboard`): the newest entries of
+  NIRUCLIPBOARD's history (`~/.local/state/niru/clipboard.json`, read on a
+  worker), each on up to two lines. A click or Enter copies one back with
+  `niruclipboard copy`; a click on the title opens the clipboard view.
+- **Notifications card** (module `notifications`): what NIRUNOTIFY showed
+  since it started, newest first (its history is kept in memory, asked over
+  its control socket on a worker), and whether do not disturb is on.
+- Both cards are in the default modules. Six cards sit in two even rows
+  (three and three) where four fit in one; a configured `modules` list
+  without them leaves them out.
+- The panel still opens at once: its first frame is drawn before any source
+  is read (about 20 ms from start to first frame in a test X server, as in
+  0.22).
+- `install.sh` downloads 0.23.0 by default (it still said 0.11.0).
+
 ## 0.22.3 (2026-11-25)
 
 - NIRUPANEL: a click on the SYSTEM card opens NIRUSYS, the NIRUX system

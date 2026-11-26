@@ -23,10 +23,11 @@ second, competing settings implementation.
 - NIRUPANEL (`Super+Space`, `nirulauncher --panel`): a floating panel in
   the middle of the screen with a retro logo, app search over icons, and
   modules for today (weather and events from NIRUTODAY), the system, updates,
-  what plays in NIRUAMP, your Tailscale computers (ssh, files, copy the
-  address), quick switches (do not disturb, night light, Wi-Fi, Bluetooth)
-  and power. Its search also finds key bindings and runs them. Choose and
-  order the modules in `[panel]`.
+  what plays in NIRUAMP, the clipboard history, recent notifications, your
+  Tailscale computers (ssh, files, copy the address), quick switches (do not
+  disturb, night light, Wi-Fi, Bluetooth) and power. One search finds apps,
+  key bindings, settings and actions, computers, manual topics and files at
+  once, in groups. Choose and order the modules in `[panel]`.
 - Application search with multi-word, keyword, diacritic-insensitive and
   conservative fuzzy matching, favourites, pins and launch-history ranking.
 - Window switcher and workspace-grouped overview.
@@ -320,9 +321,10 @@ url = "https://searx.example/search?q={query}"
 alias = "sx"
 
 [panel]                       # NIRUPANEL; every key is optional
-modules = ["apps", "today", "system", "updates", "media", "computers",
-           "toggles", "power", "keys"]
+modules = ["apps", "today", "system", "updates", "media", "clipboard",
+           "notifications", "computers", "toggles", "power", "keys"]
 app_rows = 2                  # rows of apps, 1 to 4
+search = ["apps", "keys", "settings", "computers", "manual", "files"]
 
 [panel.computers]             # the computers module; every key is optional
 # hosts = ["othala", "nirumac"]   # these, in this order (default: your own)
@@ -344,12 +346,17 @@ show_hidden = false
 weather, warnings and today's events from `nirutoday --brief`), `system`
 (CPU, memory, disk, temperature, battery, uptime), `updates` (NIRUX and system
 packages, as NIRUBAR counted them), `media` (what NIRUAMP plays, with
-previous, play or pause and next), `computers` (your Tailscale computers),
-`toggles`, `power` (log out, restart and shut down ask once more) and `keys`
-(the search also finds key bindings). A configured list without a module
-leaves it out, so add `computers` and `keys` to an older list to get them.
-Type to search, Enter starts the chosen app, Tab and the arrows move, Esc
-clears the search or closes, and `Super+Space` again closes it. Everything is
+previous, play or pause and next), `clipboard` (the newest clipboard entries
+from NIRUCLIPBOARD; a click copies one back, a click on the title opens the
+clipboard view), `notifications` (what NIRUNOTIFY showed since it started,
+newest first, and whether do not disturb is on), `computers` (your Tailscale
+computers), `toggles`, `power` (log out, restart and shut down ask once more)
+and `keys` (the search also finds key bindings). A configured list without a
+module leaves it out, so add `clipboard`, `notifications`, `computers` and
+`keys` to an older list to get them. Six cards sit in two even rows (three
+and three) where four fit in one. Type to search, Enter opens what has the
+focus, Tab and the arrows move, Esc clears the search or closes, and
+`Super+Space` again closes it. Everything is
 read locally; slow sources are read in the background, so the panel shows at
 once. Icons are drawn from the icon themes (PNG and SVG) once and kept in
 `~/.cache/nirulauncher/icons/`; an app without one gets a letter tile. Text
@@ -369,15 +376,37 @@ in the background), Shift+Enter or a middle click opens `sftp://NAME/` with
 `xdg-open`, Ctrl+C or a right click copies its Tailscale address, and
 Ctrl+Shift+C its name.
 
-*Key bindings.* Typing also searches the key bindings in effect, from
-`niructl keys --json` (NIRUWM's table and the keys other programs register),
-read once on the first search and kept while the panel is open. Words match
-in any order, without regard to case or accents, and a combination such as
-`super+t` finds its key. The ones found take the place of the cards and the
-computers, with the keys on the left and what they do beside them. Enter or a
-click runs one through `niructl keys run`, as if the key were pressed; one
-that ends the session, sleeps, or closes or kills a window asks once more. A
-row that cannot be run is shown only. `Super+/` still lists them all.
+*Search.* The field at the top searches everything at once. The apps that
+match stay in the tiles at the top; below them, in the place of the cards and
+the computers, the rest shows in groups with a title and a count: key
+bindings, settings and actions, computers and manual topics on the left,
+files on the right. `[panel] search` chooses the groups (`apps`, `keys`,
+`settings`, `computers`, `manual`, `files`; all by default, `[]` finds apps
+only); key bindings and computers also need their modules. Nothing is read
+before the first letter: then the key bindings, the launcher's settings and
+actions (the Actions view's own rows, only those the panel can open) and the
+manual's chapters and headings (`nirux manual --path`) are read once on
+workers and kept while the panel is open. Files are the Files view's search
+(`[files]`: plocate or locate, fd, or the built-in walker, recently used
+files first) from two letters on, on a worker that a newer letter cancels,
+with a time limit and at most `[files] max_results` rows; they fill in their
+column when they come, and the column's last line says how many and how they
+were found. Words match in any order, without regard to case or accents,
+and every group is ranked the way the launcher ranks it. Up and Down move
+through a group and on to the next, Left and Right cross to the other
+column, and a click chooses. Enter opens a setting's view or runs its
+action, opens a manual topic in `nirux manual`, and opens a file;
+Shift+Enter or a middle click opens a file's folder, Ctrl+C or a right click
+copies its path. Without cards or computers the results get room of their
+own below the apps. Enter when nothing matches searches the launcher.
+
+*Key bindings.* The key bindings in effect come from `niructl keys --json`
+(NIRUWM's table and the keys other programs register). A combination such as
+`super+t` finds its key. They show with the keys on the left and what they do
+beside them. Enter or a click runs one through `niructl keys run`, as if the
+key were pressed; one that ends the session, sleeps, or closes or kills a
+window asks once more. A row that cannot be run is shown only. `Super+/`
+still lists them all.
 
 `{query}` is replaced by the percent-encoded phrase; only `http` and `https`
 addresses are opened. `enabled = false` on a built-in id turns that engine off.

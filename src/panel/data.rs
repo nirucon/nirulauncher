@@ -320,6 +320,84 @@ fn parse_media(v: &serde_json::Value) -> Option<Media> {
 
 // --------------------------------------------------------------- computers
 
+// ------------------------------------------------------------ notifications
+
+/// One notification NIRUNOTIFY keeps in its history.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Notice {
+    pub(crate) app: String,
+    pub(crate) summary: String,
+    pub(crate) body: String,
+}
+
+/// The notifications NIRUNOTIFY remembers, newest first, and whether Do
+/// not disturb is on.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Notices {
+    pub(crate) list: Vec<Notice>,
+    pub(crate) dnd: bool,
+}
+
+/// NIRUNOTIFY's control socket (`nirunotify --history` asks the same one).
+fn notify_socket() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        // SAFETY: getuid has no preconditions.
+        .join(format!("nirunotify-{}.sock", unsafe { libc::getuid() }))
+}
+
+/// One line to NIRUNOTIFY and its whole answer; `None` when it does not run.
+fn notify_ask(command: &str) -> Option<String> {
+    use std::io::Read;
+    let mut sock = std::os::unix::net::UnixStream::connect(notify_socket()).ok()?;
+    sock.set_read_timeout(Some(Duration::from_millis(400)))
+        .ok()?;
+    sock.set_write_timeout(Some(Duration::from_millis(400)))
+        .ok()?;
+    sock.write_all(format!("{command}\n").as_bytes()).ok()?;
+    let mut reply = Vec::new();
+    // The history is at most 100 notifications; a little more is cut.
+    sock.take(256 * 1024).read_to_end(&mut reply).ok()?;
+    Some(String::from_utf8_lossy(&reply).into_owned())
+}
+
+/// `history`'s lines (`ID TAB APP TAB SUMMARY TAB BODY`, oldest first),
+/// newest first.
+pub(crate) fn parse_history(text: &str) -> Vec<Notice> {
+    let mut list: Vec<Notice> = text
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.splitn(4, '\t');
+            let _id = f.next()?.trim().parse::<u32>().ok()?;
+            let clean = |s: Option<&str>| {
+                s.unwrap_or("")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let app = clean(f.next());
+            let summary = clean(f.next());
+            let body = clean(f.next());
+            (!summary.is_empty() || !body.is_empty()).then_some(Notice { app, summary, body })
+        })
+        .collect();
+    list.reverse();
+    list
+}
+
+/// What NIRUNOTIFY remembers, read from its control socket. Its history is
+/// kept in memory only, so there is nothing after a restart.
+pub(crate) fn notifications() -> Result<Notices, String> {
+    let text = notify_ask("history").ok_or_else(|| "NIRUNOTIFY is not running".to_string())?;
+    let dnd = notify_ask("dnd status").is_some_and(|s| s.trim() == "dnd on");
+    Ok(Notices {
+        list: parse_history(&text),
+        dnd,
+    })
+}
+
 /// Whether a program is on PATH (a few `stat` calls, no process).
 pub(crate) fn on_path(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|path| {
@@ -519,6 +597,17 @@ mod tests {
             Toggle::Wifi.command(false),
             ["nmcli", "radio", "wifi", "off"]
         );
+    }
+
+    #[test]
+    fn notifications_come_newest_first() {
+        let text = "7\tnirux\tUpdate ready\tNIRUX 1.0\n8\tMail\tAnna\tLunch\n  on Friday?\nbad line\n9\tx\t\t\n";
+        let list = parse_history(text);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].app, "Mail");
+        assert_eq!(list[0].body, "Lunch");
+        assert_eq!(list[1].summary, "Update ready");
+        assert!(parse_history("").is_empty());
     }
 
     #[test]
